@@ -6,6 +6,25 @@
 Инструкция рассчитана на новый VPS с Ubuntu 24.04 и содержит воспроизводимые
 команды, пояснения, диагностику и проверку self-healing.
 
+## Оглавление
+
+- [Что получится](#что-получится)
+- [Требования](#требования)
+- [Установка](#установка)
+  - [1. Обновление Ubuntu](#1-обновление-ubuntu)
+  - [2. Проверка предпосылок](#2-проверка-предпосылок)
+  - [3. Защита Kubernetes API](#3-защита-kubernetes-api)
+  - [4. Установка K3s](#4-установка-k3s)
+  - [5. Проверка кластера на сервере](#5-проверка-кластера-на-сервере)
+  - [6. Безопасный доступ с MacBook](#6-безопасный-доступ-с-macbook)
+  - [7. Тестовое приложение](#7-тестовое-приложение)
+  - [8. Полезная диагностика](#8-полезная-диагностика)
+  - [9. Проверка текущего состояния](#9-проверка-текущего-состояния)
+  - [10. Учебный стенд Kafka, PostgreSQL и интеграционного сервиса](#10-учебный-стенд-kafka-postgresql-и-интеграционного-сервиса)
+  - [Ошибка, обнаруженная во время установки](#ошибка-обнаруженная-во-время-установки)
+- [Полезные ссылки](#полезные-ссылки)
+- [Лицензия](#лицензия)
+
 ## Что получится
 
 - single-node K3s, где VPS одновременно выполняет роли control plane и worker;
@@ -223,44 +242,127 @@ df -hT /
 
 ### 6. Безопасный доступ с MacBook
 
-На MacBook создаем отдельный kubeconfig. Файл содержит административные
-сертификаты, поэтому его нельзя добавлять в Git:
+#### Установка kubectl
+
+Устанавливаем [Homebrew](https://brew.sh/), если его еще нет:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Устанавливаем самостоятельный `kubectl`:
+
+```bash
+brew install kubectl
+```
+
+Проверяем установку:
+
+```bash
+kubectl version --client
+```
+
+#### Получение kubeconfig
+
+Создаем каталог и копируем kubeconfig с VPS:
 
 ```bash
 mkdir -p ~/.kube
+chmod 700 ~/.kube
+
 ssh k3s-vps 'sudo cat /etc/rancher/k3s/k3s.yaml' > ~/.kube/k3s-vps.yaml
 chmod 600 ~/.kube/k3s-vps.yaml
 ```
 
-В отдельном терминале открываем SSH-туннель:
+Проверяем адрес API в полученном файле:
 
 ```bash
-ssh -N -L 6443:127.0.0.1:6443 k3s-vps
+grep 'server:' ~/.kube/k3s-vps.yaml
 ```
 
-Пока туннель работает, используем кластер с ноутбука:
+Ожидаемый адрес:
+
+```text
+server: https://127.0.0.1:6443
+```
+
+Файл содержит административные сертификаты кластера. Его нельзя добавлять в
+Git или передавать другим пользователям.
+
+Если на MacBook еще нет основного kubeconfig, создаем ссылку, чтобы `kubectl`
+и GUI-клиенты автоматически находили кластер:
 
 ```bash
-KUBECONFIG=~/.kube/k3s-vps.yaml kubectl get nodes
-KUBECONFIG=~/.kube/k3s-vps.yaml kubectl get pods -A
+test -e ~/.kube/config || ln -s k3s-vps.yaml ~/.kube/config
 ```
 
-Для удобства можно установить переменную только в текущей shell-сессии:
+Если `~/.kube/config` уже используется для других кластеров, не заменяем его.
+Указываем отдельный файл явно:
 
 ```bash
 export KUBECONFIG=~/.kube/k3s-vps.yaml
+```
+
+#### Управляемый SSH-туннель
+
+Запускаем SSH-туннель в фоне. Control socket позволяет проверить и корректно
+остановить именно этот туннель:
+
+```bash
+ssh -M -S ~/.ssh/k3s-vps-tunnel.sock \
+  -fN \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -L 127.0.0.1:6443:127.0.0.1:6443 \
+  k3s-vps
+```
+
+Проверяем туннель и доступ к кластеру:
+
+```bash
+ssh -S ~/.ssh/k3s-vps-tunnel.sock -O check k3s-vps
+kubectl get nodes -o wide
+kubectl get pods -A
+```
+
+Порт `6443` остается закрытым от публичного интернета. Локальный
+`127.0.0.1:6443` передается через SSH к Kubernetes API на VPS.
+
+Останавливаем туннель:
+
+```bash
+ssh -S ~/.ssh/k3s-vps-tunnel.sock -O exit k3s-vps
+```
+
+После перезагрузки или разрыва соединения туннель нужно запустить снова.
+
+#### Подключение Aptakube
+
+[Aptakube](https://aptakube.com/) — графический Kubernetes-клиент для macOS,
+который использует локальные kubeconfig-файлы и не требует установки
+дополнительных компонентов в кластер.
+
+Скачиваем и устанавливаем Aptakube с официального сайта. Перед запуском
+проверяем SSH-туннель и доступ через `kubectl`:
+
+```bash
+ssh -S ~/.ssh/k3s-vps-tunnel.sock -O check k3s-vps
 kubectl get nodes
 ```
 
-Порты `80`, `443` и `6443` пока не должны открываться в публичный интернет.
-SSH-туннель передает запросы через защищенное SSH-соединение и подключается к
-API локально на VPS.
-
-Остановить созданный SSH-туннель можно командой:
+Запускаем Aptakube:
 
 ```bash
-pkill -f 'ssh -fN -o ExitOnForwardFailure=yes -L 6443:127.0.0.1:6443 k3s-vps'
+open -a Aptakube
 ```
+
+Если `~/.kube/config` ссылается на kubeconfig K3s, Aptakube автоматически
+обнаружит кластер. Иначе добавляем файл `~/.kube/k3s-vps.yaml` вручную через
+интерфейс приложения.
+
+Aptakube использует адрес `https://127.0.0.1:6443` из kubeconfig. Без
+работающего SSH-туннеля кластер будет отображаться как недоступный.
 
 ### 7. Тестовое приложение
 
@@ -375,6 +477,155 @@ sudo k3s kubectl logs -n <namespace> <pod-name>
 
 ```bash
 sudo k3s kubectl describe pod -n <namespace> <pod-name>
+```
+
+### 9. Проверка текущего состояния
+
+Этот короткий чек-лист удобно выполнять в начале каждой учебной сессии.
+
+Проверяем VPS, сервис K3s и параметры его запуска:
+
+```bash
+ssh k3s-vps 'uptime; free -h; df -h /; swapon --show'
+ssh k3s-vps 'systemctl is-enabled k3s; systemctl is-active k3s'
+ssh k3s-vps 'sudo systemctl show k3s -p ExecStart --value'
+```
+
+Проверяем основные ресурсы кластера:
+
+```bash
+ssh k3s-vps 'sudo k3s kubectl get nodes -o wide'
+ssh k3s-vps 'sudo k3s kubectl get pods -A -o wide'
+ssh k3s-vps 'sudo k3s kubectl get svc,storageclass,ingressclass -A'
+ssh k3s-vps 'sudo k3s kubectl top nodes'
+```
+
+Проверяем предупреждения:
+
+```bash
+ssh k3s-vps \
+  'sudo k3s kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp'
+ssh k3s-vps \
+  'sudo journalctl -u k3s --since "24 hours ago" -p warning --no-pager'
+```
+
+Проверяем host firewall:
+
+```bash
+ssh k3s-vps 'systemctl is-active k3s-api-guard.service'
+ssh k3s-vps 'sudo nft list table inet k3s_api_guard'
+```
+
+На ноутбуке проверяем, что публичные порты закрыты. Таймаут ожидаем, если
+firewall отбрасывает пакеты:
+
+```bash
+VPS_IP=<PUBLIC_VPS_IP>
+
+for port in 80 443 6443; do
+  curl -k -sS -o /dev/null \
+    --connect-timeout 3 \
+    --max-time 4 \
+    -w "port=${port} http_code=%{http_code}\n" \
+    "https://${VPS_IP}:${port}" || true
+done
+```
+
+### 10. Учебный стенд Kafka, PostgreSQL и интеграционного сервиса
+
+Манифест [`manifests/mq-kafka-lab.yaml`](manifests/mq-kafka-lab.yaml)
+разворачивает в отдельном namespace:
+
+- single-node Kafka в KRaft-режиме;
+- PostgreSQL;
+- приватный образ `mq-kafka-integration-service`;
+- ClusterIP Services и persistent volumes для Kafka и PostgreSQL.
+
+IBM MQ, Kafka Connect и tracing collector в этот учебный стенд не входят.
+
+Статическая конфигурация Kafka хранится в ConfigMap `kafka-config` как файл
+`server.properties`. В переменных окружения контейнера остается только
+окруженческая JVM-настройка `KAFKA_HEAP_OPTS`.
+
+Init container выполняет идемпотентное форматирование KRaft storage перед
+запуском broker-а. При изменении `server.properties` увеличиваем значение
+аннотации `mq-kafka-lab/config-revision` в шаблоне Kafka Pod, чтобы StatefulSet
+перезапустил Pod с новой конфигурацией.
+
+Контейнер приложения хранится в приватном GitHub Container Registry. Один раз
+добавляем scope `read:packages` к локальной авторизации GitHub CLI:
+
+```bash
+gh auth refresh -h github.com -s read:packages
+```
+
+Создаем namespace и pull secret из локальной авторизации. Токен не
+записывается в манифест или Git:
+
+```bash
+kubectl create namespace mq-kafka-lab
+
+token=$(gh auth token)
+
+kubectl create secret docker-registry ghcr-pull-secret \
+  --namespace mq-kafka-lab \
+  --docker-server ghcr.io \
+  --docker-username <GITHUB_USERNAME> \
+  --docker-password "$token" \
+  --dry-run=client \
+  -o yaml | kubectl apply -f -
+
+unset token
+```
+
+Разворачиваем стенд:
+
+```bash
+kubectl apply -f manifests/mq-kafka-lab.yaml
+```
+
+Проверяем rollout и ресурсы:
+
+```bash
+kubectl rollout status statefulset/kafka --namespace mq-kafka-lab
+kubectl rollout status statefulset/postgres --namespace mq-kafka-lab
+kubectl rollout status deployment/mq-kafka-integration-service \
+  --namespace mq-kafka-lab
+
+kubectl get all,pvc --namespace mq-kafka-lab
+kubectl top pods --namespace mq-kafka-lab
+```
+
+Проверяем health endpoint из временного Pod:
+
+```bash
+kubectl run health-check \
+  --namespace mq-kafka-lab \
+  --image=curlimages/curl:8.7.1 \
+  --restart=Never \
+  --rm -i --quiet \
+  -- curl -fsS http://mq-kafka-integration-service:8080/readyz
+```
+
+Проверяем Kafka и таблицы PostgreSQL:
+
+```bash
+kubectl exec --namespace mq-kafka-lab kafka-0 -- \
+  kafka-topics --bootstrap-server kafka:9092 --list
+
+kubectl exec --namespace mq-kafka-lab postgres-0 -- \
+  psql -U mq_kafka -d mq_kafka -c '\dt'
+```
+
+Манифест содержит учебный пароль PostgreSQL. Перед использованием вне
+изолированного стенда замените его и храните секреты во внешнем secret
+manager.
+
+Удаление namespace удалит Pods, Services и связанные local-path volumes со
+всеми данными стенда:
+
+```bash
+kubectl delete namespace mq-kafka-lab
 ```
 
 ### Ошибка, обнаруженная во время установки

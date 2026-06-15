@@ -4,3 +4,4 @@
 *.swp
 kubeconfig
 *.kubeconfig
+/.idea/
