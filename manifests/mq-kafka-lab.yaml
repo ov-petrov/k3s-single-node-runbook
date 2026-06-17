@@ -165,7 +165,13 @@ data:
   DB_DRIVER: org.postgresql.Driver
   KAFKA_BOOTSTRAP_SERVERS: kafka:9092
   KAFKA_CONSUMER_GROUP_ID: mq-kafka-integration-service
-  IBM_MQ_CONN_NAME: mq-not-installed(1414)
+  JMS_BROKER_URL: tcp://activemq:61616
+  JMS_USERNAME: mq_kafka
+  SPRING_ACTIVEMQ_BROKER_URL: tcp://activemq:61616
+  SPRING_ACTIVEMQ_USER: mq_kafka
+  SPRING_ARTEMIS_MODE: native
+  SPRING_ARTEMIS_BROKER_URL: tcp://activemq:61616
+  SPRING_ARTEMIS_USER: mq_kafka
   MANAGEMENT_TRACING_ENABLED: "false"
   DEBUG_KAFKA_PUBLISHER_ENABLED: "true"
 ---
@@ -178,6 +184,101 @@ type: Opaque
 stringData:
   POSTGRES_PASSWORD: mq-kafka-lab-change-me
   DB_PASSWORD: mq-kafka-lab-change-me
+  ACTIVEMQ_PASSWORD: mq-kafka-lab-change-me
+  JMS_PASSWORD: mq-kafka-lab-change-me
+  SPRING_ACTIVEMQ_PASSWORD: mq-kafka-lab-change-me
+  SPRING_ARTEMIS_PASSWORD: mq-kafka-lab-change-me
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: activemq
+  namespace: mq-kafka-lab
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: activemq
+  ports:
+    - name: jms
+      port: 61616
+      targetPort: jms
+    - name: web
+      port: 8161
+      targetPort: web
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: activemq
+  namespace: mq-kafka-lab
+spec:
+  serviceName: activemq
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: activemq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: activemq
+        app.kubernetes.io/part-of: mq-kafka-lab
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: activemq
+          image: apache/activemq-artemis:latest-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: jms
+              containerPort: 61616
+            - name: web
+              containerPort: 8161
+          env:
+            - name: ARTEMIS_USER
+              value: mq_kafka
+            - name: ARTEMIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mq-kafka-lab-secret
+                  key: ACTIVEMQ_PASSWORD
+            - name: ANONYMOUS_LOGIN
+              value: "false"
+            - name: JAVA_ARGS
+              value: -Xms128M -Xmx256M
+          startupProbe:
+            tcpSocket:
+              port: jms
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: jms
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: jms
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/artemis-instance
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
 ---
 apiVersion: v1
 kind: Service
@@ -285,12 +386,10 @@ spec:
         app.kubernetes.io/part-of: mq-kafka-lab
     spec:
       enableServiceLinks: false
-      imagePullSecrets:
-        - name: ghcr-pull-secret
       containers:
         - name: mq-kafka-integration-service
-          image: ghcr.io/ov-petrov/mq-kafka-integration-service:latest
-          imagePullPolicy: IfNotPresent
+          image: opetrov2019/kafka-mq-integration-service:integration-latest
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8080
