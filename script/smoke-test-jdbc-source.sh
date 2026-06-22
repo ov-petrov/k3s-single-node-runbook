@@ -39,14 +39,22 @@ produce_kafka_message() {
 consume_one_mq_message() {
   kubectl_ns exec activemq-0 -- env MQ_QUEUE="${MQ_REQUEST_QUEUE}" sh -ec '
     artemis="/var/lib/artemis-instance/bin/artemis"
-    "${artemis}" consumer \
-      --silent \
+    message_file="/tmp/k3s-smoke-message.xml"
+    rm -f "${message_file}"
+
+    timeout 20s "${artemis}" consumer \
       --break-on-null \
       --destination "queue://${MQ_QUEUE}" \
       --message-count 1 \
       --receive-timeout 5000 \
+      --data "${message_file}" \
       --user "${ARTEMIS_USER}" \
-      --password "${ARTEMIS_PASSWORD}"
+      --password "${ARTEMIS_PASSWORD}" >/tmp/k3s-smoke-consumer.out 2>&1
+
+    cat /tmp/k3s-smoke-consumer.out
+    if [ -f "${message_file}" ]; then
+      cat "${message_file}"
+    fi
   ' 2>&1
 }
 

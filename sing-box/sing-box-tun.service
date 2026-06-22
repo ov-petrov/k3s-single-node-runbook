@@ -1,0 +1,16 @@
+[Unit]
+Description=sing-box host TUN proxy
+Documentation=https://sing-box.sagernet.org/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/sing-box run -c /etc/sing-box/config.json
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=infinity
+
+[Install]
+WantedBy=multi-user.target

@@ -48,19 +48,20 @@ ensure_artemis_queue() {
       --auto-create-address \
       --user "${ARTEMIS_USER}" \
       --password "${ARTEMIS_PASSWORD}" 2>&1)" && {
-        printf "%s\n" "${output}"
+        echo "Artemis queue is ready: ${MQ_QUEUE}"
         exit 0
       }
 
-    case "${output}" in
-      *"already exists"*)
-        echo "Artemis queue already exists: ${MQ_QUEUE}"
-        ;;
-      *)
-        printf "%s\n" "${output}" >&2
-        exit 1
-        ;;
-    esac
+    if "${artemis}" queue stat \
+      --user "${ARTEMIS_USER}" \
+      --password "${ARTEMIS_PASSWORD}" \
+      --queueName "${MQ_QUEUE}" 2>/dev/null | grep -F "${MQ_QUEUE}" >/dev/null; then
+      echo "Artemis queue already exists: ${MQ_QUEUE}"
+      exit 0
+    fi
+
+    printf "%s\n" "${output}" >&2
+    exit 1
   '
 }
 

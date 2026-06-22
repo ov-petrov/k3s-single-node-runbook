@@ -93,7 +93,8 @@ MQ_RESPONSE_QUEUE=SMOKE.KAFKA.TO.MQ.RESPONSE \
 2. Показывает route-конфигурацию из PostgreSQL.
 3. Очищает request queue.
 4. Публикует уникальное сообщение в Kafka topic.
-5. Читает одно сообщение из ActiveMQ request queue.
+5. Читает одно сообщение из ActiveMQ request queue через
+   `artemis consumer --data` во временный XML-файл внутри pod.
 6. Считает тест успешным, если payload содержит текущий `TEST_ID`.
 
 Успешный результат:
@@ -101,6 +102,10 @@ MQ_RESPONSE_QUEUE=SMOKE.KAFKA.TO.MQ.RESPONSE \
 ```text
 Smoke test passed: Kafka message smoke-... reached MQ queue SMOKE.KAFKA.TO.MQ.REQUEST.
 ```
+
+Для проверки payload используется XML dump Artemis CLI. Это сделано
+намеренно: обычный `artemis consumer` без `--data` не печатает тело сообщения,
+а вариант с `--verbose` выводит командную строку с параметрами подключения.
 
 ## Ручные проверки
 
@@ -138,6 +143,10 @@ kubectl exec --namespace mq-kafka-lab activemq-0 -- \
     --password "$ARTEMIS_PASSWORD" \
     --queueName SMOKE.KAFKA.TO.MQ.REQUEST'
 ```
+
+После успешного smoke-теста `MESSAGE COUNT` обычно равен `0`, потому что
+скрипт вычитывает сообщение для проверки payload. При этом `MESSAGES ADDED` и
+`MESSAGES ACKED` должны увеличиться.
 
 Логи сервиса:
 

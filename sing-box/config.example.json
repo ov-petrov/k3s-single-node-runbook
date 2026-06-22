@@ -1,0 +1,99 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "singtun0",
+      "address": [
+        "172.31.255.1/30"
+      ],
+      "mtu": 9000,
+      "auto_route": true,
+      "strict_route": true,
+      "stack": "system"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "proxy-out",
+      "server": "<VLESS_SERVER_IP_OR_HOSTNAME>",
+      "server_port": 12345,
+      "uuid": "<VLESS_CLIENT_UUID>",
+      "tls": {
+        "enabled": true,
+        "server_name": "<REALITY_TLS_SERVER_NAME>",
+        "alpn": "h2",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<REALITY_PUBLIC_KEY>",
+          "short_id": "<REALITY_SHORT_ID>"
+        }
+      },
+      "transport": {
+        "type": "grpc",
+        "service_name": "<GRPC_SERVICE_NAME>",
+        "idle_timeout": "15s",
+        "ping_timeout": "15s"
+      },
+      "packet_encoding": "xudp"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "proxy-out",
+    "rules": [
+      {
+        "network": [
+          "udp",
+          "tcp"
+        ],
+        "port": 53,
+        "action": "hijack-dns"
+      },
+      {
+        "ip_cidr": [
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "224.0.0.0/4",
+          "240.0.0.0/4",
+          "<VPS_PROVIDER_NETWORK_CIDR>",
+          "<ADMIN_SSH_CLIENT_IP>/32",
+          "<VLESS_SERVER_IP>/32",
+          "8.8.8.8/32",
+          "8.8.4.4/32"
+        ],
+        "outbound": "direct"
+      }
+    ]
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "google-dns",
+        "server": "8.8.8.8",
+        "server_port": 53
+      }
+    ],
+    "final": "google-dns",
+    "strategy": "ipv4_only",
+    "disable_cache": false
+  }
+}
