@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh sing-box healthy candidate pool every 12 hours
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=12h
+Unit=singbox-pool-refresh.service
+
+[Install]
+WantedBy=timers.target

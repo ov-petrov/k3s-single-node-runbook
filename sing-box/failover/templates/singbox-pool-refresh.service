@@ -1,0 +1,16 @@
+[Unit]
+Description=sing-box pool refresh probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=/home/<USER>
+Environment=HERMES_HOME=/home/<USER>/.hermes
+EnvironmentFile=/opt/singbox-failover/failover.env
+ExecStart=/usr/bin/python3 /opt/singbox-failover/scripts/singbox_pool_probe.py --inventory /opt/singbox-failover/inventory.yaml --openai-mode transport --timeout 10 --out /opt/singbox-failover/pool-probe-results.json
+WorkingDirectory=/opt/singbox-failover
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/singbox-failover /home/<USER>/.hermes

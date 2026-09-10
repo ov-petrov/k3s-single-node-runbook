@@ -1,0 +1,12 @@
+# Runtime и реальные конфигурации должны храниться вне каталога исходников.
+.env
+failover.env
+inventory.yaml
+state.json
+pool-probe-results.json
+base-config.json
+configs*.json
+generated/
+probes/
+__pycache__/
+*.pyc

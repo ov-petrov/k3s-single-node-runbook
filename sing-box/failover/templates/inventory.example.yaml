@@ -1,0 +1,29 @@
+# Пример для /opt/singbox-failover; это не реальный inventory cloud-ru.
+configs:
+  - name: cfg-00
+    path: /opt/singbox-failover/generated/00-primary.json
+    priority: 100
+    enabled: true
+    source_outbound_tag: primary
+  - name: cfg-01
+    path: /opt/singbox-failover/generated/01-reserve.json
+    priority: 99
+    enabled: true
+    source_outbound_tag: reserve
+runtime:
+  active_config_path: /etc/sing-box/config.json
+  switch_method: copy-and-restart
+  singbox_service_name: sing-box-tun
+  singbox_check_command: /usr/local/bin/sing-box check -c {config_path}
+  singbox_restart_command: systemctl restart sing-box-tun
+  stabilization_delay_seconds: 5
+  request_timeout_seconds: 10
+  cooldown_seconds: 900
+  consecutive_failures_before_switch: 2
+  require_both_apis: true
+  state_path: /opt/singbox-failover/state.json
+  log_path: /opt/singbox-failover/failover.log
+  pool_results_path: /opt/singbox-failover/pool-probe-results.json
+  pool_refresh_max_age_seconds: 43200
+  pool_probe_script: /opt/singbox-failover/scripts/singbox_pool_probe.py
+  active_openai_mode: transport
