@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import sys
 import tempfile
 import unittest
@@ -47,6 +48,49 @@ class SubscriptionParserTest(unittest.TestCase):
         self.assertEqual(len(catalog['outbounds']), 1)
         self.assertEqual(catalog['outbounds'][0]['server'], '198.51.100.10')
         self.assertEqual(summary, {'format': 'vless-uri-list', 'skipped': 1})
+
+    def test_parses_singbox_profile_list(self) -> None:
+        payload = json.dumps([
+            {
+                'remarks': 'first profile',
+                'outbounds': [
+                    {'type': 'direct', 'tag': 'direct'},
+                    {
+                        'type': 'vless',
+                        'tag': 'first label',
+                        'server': 'edge-one.example',
+                        'server_port': 443,
+                        'uuid': 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+                    },
+                ],
+            },
+            {
+                'remarks': 'duplicate profile label',
+                'outbounds': [
+                    {
+                        'type': 'vless',
+                        'tag': 'renamed label',
+                        'server': 'edge-one.example',
+                        'server_port': 443,
+                        'uuid': 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+                    },
+                    {
+                        'type': 'vless',
+                        'tag': 'second label',
+                        'server': 'edge-two.example',
+                        'server_port': 8443,
+                        'uuid': 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+                    },
+                ],
+            },
+        ]).encode('utf-8')
+
+        catalog, summary = parse_subscription_payload(payload)
+
+        self.assertEqual(summary, {'format': 'sing-box-json-profile-list', 'skipped': 2})
+        self.assertEqual(len(catalog['outbounds']), 2)
+        self.assertEqual(catalog['outbounds'][0]['server'], 'edge-one.example')
+        self.assertEqual(catalog['outbounds'][1]['server'], 'edge-two.example')
 
     def test_rejects_payload_without_supported_entries(self) -> None:
         with self.assertRaises(SubscriptionError):

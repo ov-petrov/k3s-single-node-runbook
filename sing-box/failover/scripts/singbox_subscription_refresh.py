@@ -245,6 +245,52 @@ def decode_base64_subscription(text: str) -> str:
         raise SubscriptionError('subscription base64 cannot be decoded as UTF-8') from exc
 
 
+def normalize_singbox_json(document: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Extract unique VLESS outbounds from one or more sing-box configs.
+
+    Providers commonly return either one sing-box config object or an array of
+    independent config objects.  The surrounding inbounds, route and log
+    sections are intentionally ignored: each candidate is rebuilt from the
+    local trusted base config.
+    """
+    if isinstance(document, dict):
+        documents = [document]
+        source_format = 'sing-box-json'
+    elif isinstance(document, list):
+        documents = document
+        source_format = 'sing-box-json-profile-list'
+    else:
+        raise SubscriptionError('subscription JSON is neither an object nor an array')
+
+    outbounds: list[dict[str, Any]] = []
+    skipped = 0
+    for profile in documents:
+        if not isinstance(profile, dict):
+            skipped += 1
+            continue
+        profile_outbounds = profile.get('outbounds')
+        if not isinstance(profile_outbounds, list):
+            skipped += 1
+            continue
+        for outbound in profile_outbounds:
+            if isinstance(outbound, dict) and outbound.get('type') == 'vless':
+                outbounds.append(outbound)
+            else:
+                skipped += 1
+
+    unique_outbounds: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for outbound in outbounds:
+        identity = outbound_identity(outbound)
+        if identity not in seen:
+            unique_outbounds.append(outbound)
+            seen.add(identity)
+    skipped += len(outbounds) - len(unique_outbounds)
+    if not unique_outbounds:
+        raise SubscriptionError('subscription JSON contains no VLESS outbounds')
+    return {'outbounds': unique_outbounds}, {'format': source_format, 'skipped': skipped}
+
+
 def parse_subscription_payload(body: bytes) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         text = body.decode('utf-8-sig').strip()
@@ -253,17 +299,12 @@ def parse_subscription_payload(body: bytes) -> tuple[dict[str, Any], dict[str, A
     if not text:
         raise SubscriptionError('subscription response is empty')
 
-    if text.startswith('{'):
+    if text.startswith(('{', '[')):
         try:
             document = json.loads(text)
         except json.JSONDecodeError as exc:
             raise SubscriptionError('subscription JSON is invalid') from exc
-        if not isinstance(document, dict) or not isinstance(document.get('outbounds'), list):
-            raise SubscriptionError('subscription JSON has no outbounds array')
-        outbounds = [outbound for outbound in document['outbounds'] if isinstance(outbound, dict) and outbound.get('type') == 'vless']
-        if not outbounds:
-            raise SubscriptionError('subscription JSON contains no VLESS outbounds')
-        return {'outbounds': outbounds}, {'format': 'sing-box-json', 'skipped': len(document['outbounds']) - len(outbounds)}
+        return normalize_singbox_json(document)
 
     outbounds, skipped = parse_vless_lines(text)
     source_format = 'vless-uri-list'
