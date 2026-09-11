@@ -1,5 +1,5 @@
 [Unit]
-Description=Refresh sing-box healthy candidate pool every 12 hours
+Description=Refresh sing-box provider subscription and healthy candidate pool every 12 hours
 
 [Timer]
 OnBootSec=3min

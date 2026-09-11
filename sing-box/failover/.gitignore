@@ -4,6 +4,9 @@ failover.env
 inventory.yaml
 state.json
 pool-probe-results.json
+subscription.url
+subscription-catalog.json
+subscription-metadata.json
 base-config.json
 configs*.json
 generated/

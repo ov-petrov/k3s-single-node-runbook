@@ -1,0 +1,3 @@
+# Одна строка: URL подписки целиком, включая token.
+# Файл с реальным URL не коммитить; владелец root:root, права 0600.
+https://connect.sigmavpn.online/access?token=REPLACE_WITH_SECRET

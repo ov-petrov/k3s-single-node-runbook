@@ -9,7 +9,7 @@ Type=oneshot
 Environment=HOME=/home/<USER>
 Environment=HERMES_HOME=/home/<USER>/.hermes
 EnvironmentFile=/opt/singbox-failover/failover.env
-ExecStart=/usr/bin/python3 /opt/singbox-failover/scripts/singbox_failover.py --inventory /opt/singbox-failover/inventory.yaml
+ExecStart=/usr/bin/python3 /opt/singbox-failover/scripts/singbox_failover.py --inventory /opt/singbox-failover/inventory.yaml --lock-file /run/singbox-failover.lock
 WorkingDirectory=/opt/singbox-failover
 NoNewPrivileges=true
 PrivateTmp=true

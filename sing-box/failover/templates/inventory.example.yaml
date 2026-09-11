@@ -26,4 +26,5 @@ runtime:
   pool_results_path: /opt/singbox-failover/pool-probe-results.json
   pool_refresh_max_age_seconds: 43200
   pool_probe_script: /opt/singbox-failover/scripts/singbox_pool_probe.py
+  lock_path: /run/singbox-failover.lock
   active_openai_mode: transport

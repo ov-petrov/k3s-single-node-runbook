@@ -8,6 +8,7 @@
 
 Сопутствующий модуль: [sing-box — TUN-прокси и автоматическое переключение
 маршрутов](sing-box/README.md). [Механика failover и рабочие скрипты](docs/sing-box-failover.md).
+[Обновление списка серверов из подписки](docs/sing-box-subscription.md).
 
 ## Оглавление
 

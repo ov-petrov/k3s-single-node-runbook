@@ -9,12 +9,20 @@ systemd units, параметрам inventory и обезличенному со
 Базовая маршрутизация и команды управления TUN:
 [sing-box host proxy](sing-box-host-proxy.md). Шаблон TUN:
 [config.example.json](../sing-box/config.example.json).
+Получение кандидатов по закрытой ссылке провайдера описано в
+[sing-box subscription](sing-box-subscription.md).
+
+> Этот документ фиксирует состояние cloud-ru на 10 сентября 2026 года.
+> Репозиторий с тех пор получил singbox_subscription_refresh.py, устойчивые
+> идентификаторы кандидатов и общую блокировку с failover. Они не изменяют
+> работающий сервер, пока не будут отдельно развёрнуты.
 
 ## Состав механизма и исходники
 
 | Компонент | Назначение |
 | --- | --- |
 | [import_outbounds_catalog.py](../sing-box/failover/scripts/import_outbounds_catalog.py) | Собрать полные конфиги кандидатов из базового конфига и каталога outbound |
+| [singbox_subscription_refresh.py](../sing-box/failover/scripts/singbox_subscription_refresh.py) | Получить VLESS-подписку, валидировать и опубликовать новый inventory перед проверкой пула |
 | [singbox_pool_probe.py](../sing-box/failover/scripts/singbox_pool_probe.py) | Проверить кандидатов через отдельные локальные прокси, записать результаты пула |
 | [singbox_failover.py](../sing-box/failover/scripts/singbox_failover.py) | Проверить основной маршрут, выбрать и применить замену при сбое |
 | `inventory.yaml` | Кандидаты, приоритеты, команды и параметры контроллера |
@@ -23,8 +31,10 @@ systemd units, параметрам inventory и обезличенному со
 | `state.json` | Активный кандидат, счётчики ошибок, cooldown, история переключений |
 | `failover.log` и journal | JSON-события контроллера и вывод systemd-запусков |
 
-Три скрипта в репозитории — точные копии с сервера, без исправлений алгоритма.
-Их контрольные суммы сохранены в
+Три исходных скрипта были скопированы с сервера. Версии в репозитории включают
+доработки и новый refresh-скрипт, поэтому они не являются побайтной копией
+текущих файлов cloud-ru. Контрольные суммы файлов, опубликованных в этом
+репозитории, сохранены в
 [SHA256SUMS](../sing-box/failover/SHA256SUMS).
 Реальные конфиги подключений, токены, env, inventory, state и логи не публикуются.
 

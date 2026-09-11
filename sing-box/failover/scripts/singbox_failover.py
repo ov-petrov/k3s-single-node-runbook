@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import shlex
@@ -75,7 +76,15 @@ class FailoverManager:
         self.require_both = bool(self.runtime.get('require_both_apis', True))
 
     def run(self) -> int:
-        active_name = self.state.get('active_name') or self._detect_active_name()
+        detected_active_name = self._detect_active_name()
+        state_active_name = self.state.get('active_name')
+        active_name = detected_active_name or state_active_name
+        if detected_active_name and detected_active_name != state_active_name:
+            self._log(
+                'active_config_reconciled',
+                state_active_name=state_active_name,
+                detected_active_name=detected_active_name,
+            )
         active_cfg = self._find_config(active_name) if active_name else None
 
         if active_cfg:
@@ -454,9 +463,7 @@ class FailoverManager:
                 break
         if not active_outbound:
             return None
-        active_server = active_outbound.get('server')
-        active_port = active_outbound.get('server_port')
-        active_uuid = active_outbound.get('uuid')
+        active_identity = self._outbound_identity(active_outbound)
         for cfg in self.configs:
             try:
                 with Path(cfg['path']).open('r', encoding='utf-8') as fh:
@@ -466,9 +473,14 @@ class FailoverManager:
             for outbound in candidate_doc.get('outbounds', []):
                 if outbound.get('tag') != 'proxy-out':
                     continue
-                if outbound.get('server') == active_server and outbound.get('server_port') == active_port and outbound.get('uuid') == active_uuid:
+                if self._outbound_identity(outbound) == active_identity:
                     return cfg['name']
         return None
+
+    @staticmethod
+    def _outbound_identity(outbound: dict[str, Any]) -> str:
+        normalized = {key: value for key, value in outbound.items() if key != 'tag'}
+        return json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
     def _find_config(self, name: str | None) -> dict[str, Any] | None:
         if not name:
@@ -507,13 +519,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--inventory', required=True, help='path to inventory yaml')
     parser.add_argument('--dry-run', action='store_true', help='log candidate selection without switching')
     parser.add_argument('--check-only', action='store_true', help='check current active config only')
+    parser.add_argument('--lock-file', default='/run/singbox-failover.lock', help='shared non-blocking lock path')
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    manager = FailoverManager(Path(args.inventory), dry_run=args.dry_run, check_only=args.check_only)
-    return manager.run()
+    lock_path = Path(args.lock_file)
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open('a+', encoding='utf-8') as lock_file:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print(json.dumps({'event': 'failover_skipped', 'reason': 'lock_busy'}))
+                return 0
+            try:
+                manager = FailoverManager(Path(args.inventory), dry_run=args.dry_run, check_only=args.check_only)
+                return manager.run()
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except OSError as ex:
+        print(f'cannot acquire failover lock: {ex}', file=sys.stderr)
+        return 1
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 [Unit]
-Description=sing-box pool refresh probe
+Description=Refresh sing-box provider subscription and healthy candidate pool
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Type=oneshot
 Environment=HOME=/home/<USER>
 Environment=HERMES_HOME=/home/<USER>/.hermes
 EnvironmentFile=/opt/singbox-failover/failover.env
-ExecStart=/usr/bin/python3 /opt/singbox-failover/scripts/singbox_pool_probe.py --inventory /opt/singbox-failover/inventory.yaml --openai-mode transport --timeout 10 --out /opt/singbox-failover/pool-probe-results.json
+ExecStart=/usr/bin/python3 /opt/singbox-failover/scripts/singbox_subscription_refresh.py --inventory /opt/singbox-failover/inventory.yaml --base-config /opt/singbox-failover/base-config.json --generated-dir /opt/singbox-failover/generated --subscription-url-file /etc/singbox-failover/subscription.url --metadata-path /opt/singbox-failover/subscription-metadata.json --catalog-path /opt/singbox-failover/subscription-catalog.json --lock-path /run/singbox-failover.lock --refresh-pool
 WorkingDirectory=/opt/singbox-failover
 NoNewPrivileges=true
 PrivateTmp=true
