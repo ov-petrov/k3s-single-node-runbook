@@ -1,348 +1,110 @@
-# sing-box host proxy на cloud-ru
+# Системный прокси VPS
 
-Краткая памятка по `sing-box` на сервере `cloud-ru`.
+Sing-box поднимает интерфейс `singtun0`, применяет правила DNS и сохраняет
+прямые маршруты для административного доступа. Xray обслуживает Reality и
+выбирает узел провайдера.
 
-Актуализирована 10 сентября 2026 года. Механизм автоматического переключения,
-его рабочие скрипты и ограничения описаны отдельно:
-[sing-box failover](sing-box-failover.md).
+~~~text
+Обычный трафик → singtun0 → sing-box → SOCKS 127.0.0.1:10808 → Xray → VLESS/Reality
+~~~
 
-## Что сейчас настроено
+## Маршрутизация
 
-Есть два варианта запуска:
+В sing-box DNS-пакеты на TCP/UDP-порт 53, попавшие в TUN, обрабатываются
+действием `hijack-dns`. Локальный stub resolver может принять запрос раньше.
+При диагностике проверяйте системный resolver и upstream DNS отдельно.
 
-- старый вариант: Docker container `task-tracker-sing-box`;
-- новый вариант: host-level systemd service `sing-box-tun.service`.
+В шаблоне sing-box типизированный UDP DNS без `detour` использует прямое
+подключение. После DNS-правила срабатывают direct-исключения, в том числе
+локальные сети, сеть провайдера VPS и адрес клиента SSH. Остальные запросы
+обрабатывает `route.final: proxy-out`. Xray привязывает подключения к
+физическому интерфейсу через `sockopt.interface`, чтобы они обходили TUN.
 
-Новый вариант нужен для сценария "весь исходящий трафик сервера идет через
-прокси", без использования Docker-контейнера как отдельного proxy endpoint.
+TUN принимает IP-пакеты от ОС. VLESS и Reality работают на внешнем участке
+от Xray до узла провайдера. VLESS передаёт запросы прокси, а Reality защищает
+соединение с узлом.
 
-Файлы на сервере:
+[Параметры TUN sing-box](https://sing-box.sagernet.org/configuration/inbound/tun/)
+· [Правила маршрутизации sing-box](https://sing-box.sagernet.org/configuration/route/)
+· [DNS UDP](https://sing-box.sagernet.org/configuration/dns/server/udp/)
 
-```text
-/usr/local/bin/sing-box
-/etc/sing-box/config.json
-/etc/systemd/system/sing-box-tun.service
-/home/petrovov/planning-bot/sing-box/vless-outbound.json
-```
+## Управление
 
-Важно: `vless-outbound.json` содержит чувствительные параметры подключения
-к proxy endpoint. Не коммитить его в Git.
+Рабочая конфигурация TUN хранится в `/etc/sing-box/config.json`, а конфигурация
+пула Xray — в `/etc/xray/provider-pool.json`. Пул генерирует
+[обновление подписки](sing-box-subscription.md).
 
-Зафиксированное рабочее состояние (10 сентября 2026 года; это не live-статус):
+~~~bash
+sudo systemctl status sing-box-tun.service xray-provider-pool.service --no-pager
+systemctl list-timers 'singbox-*' --all --no-pager
+sudo journalctl -u sing-box-tun.service -u xray-provider-pool.service -n 50 --no-pager
+~~~
 
-```text
-sing-box-tun.service: active
-autostart: enabled
-task-tracker-sing-box Docker container: stopped
-```
+При ручной работе с конфигами остановите таймер обновления и дождитесь
+завершения текущего запуска `singbox-pool-refresh.service`. В установках с
+прежним контроллером то же относится к `singbox-failover.timer` и его сервису.
 
-Для TUN в диагностике зафиксирована версия sing-box `1.12.20`. На момент
-изучения контроллера основной конфиг — `cfg-03`; в последнем сохранённом
-обследовании пула здоров только он из семи кандидатов. Автоматика работает
-через `singbox-failover.timer` (5 минут) и `singbox-pool-refresh.timer` (12 часов).
-Состояние старого Docker-контейнера выше взято из прежней памятки и при
-актуализации отдельно не перепроверялось.
+Проверьте подготовленные конфиги перед применением.
 
-DNS обрабатывается самим `sing-box`: запросы на порт `53` перехватываются
-правилом `hijack-dns`, а затем резолвятся через DNS-секцию конфига.
-
-## Команды управления
-
-Проверить статус:
-
-```bash
-sudo systemctl status sing-box-tun.service --no-pager
-```
-
-Запустить:
-
-```bash
-sudo systemctl start sing-box-tun.service
-```
-
-Остановить:
-
-```bash
-sudo systemctl stop sing-box-tun.service
-```
-
-Перезапустить после изменения конфига:
-
-```bash
-sudo systemctl restart sing-box-tun.service
-```
-
-Посмотреть логи:
-
-```bash
-sudo journalctl -u sing-box-tun.service -n 100 --no-pager
-```
-
-Включить автозапуск:
-
-```bash
-sudo systemctl enable sing-box-tun.service
-```
-
-Отключить автозапуск:
-
-```bash
-sudo systemctl disable sing-box-tun.service
-```
-
-## Безопасный запуск с rollback
-
-TUN-прокси меняет маршрутизацию сервера. Ошибка в правилах может сломать SSH
-или DNS. Поэтому первый запуск лучше делать с автоматическим откатом:
-
-Если failover уже установлен, сначала остановите его таймер и дождитесь
-завершения контроллера. Иначе он может перезапустить TUN после срабатывания
-таймера остановки. Этот rollback только останавливает сервис и не восстанавливает
-прежний файл конфигурации; его резервную копию нужно сохранять отдельно.
-
-```bash
-sudo systemd-run \
-  --unit=sing-box-rollback \
-  --on-active=180s \
-  /bin/systemctl stop sing-box-tun.service
-
-sudo systemctl start sing-box-tun.service
-```
-
-Если после запуска SSH жив, DNS работает и проверки проходят, rollback можно
-отменить:
-
-```bash
-sudo systemctl stop sing-box-rollback.timer sing-box-rollback.service
-```
-
-Если SSH отвалился, через 180 секунд systemd сам остановит
-`sing-box-tun.service`.
-
-## Как править конфиг
-
-При ручном обслуживании сначала остановите таймер контроллера и дождитесь
-завершения уже запущенного `singbox-failover.service`. Остановка таймера сама
-по себе не прерывает текущий запуск. Иначе контроллер может заменить конфиг
-параллельно с ручными изменениями. После обслуживания нужно сверить live-конфиг
-с inventory и согласовать `state.active_name` перед возобновлением таймера;
-[подробнее о состоянии](sing-box-failover.md#состояние-и-определение-активного-конфига).
-
-Основной конфиг:
-
-```bash
-sudo nano /etc/sing-box/config.json
-```
-
-Проверка перед применением:
-
-```bash
+~~~bash
 sudo /usr/local/bin/sing-box check -c /etc/sing-box/config.json
-```
+sudo /usr/local/bin/xray run -test -config /etc/xray/provider-pool.json
+~~~
 
-Применение:
+Для изменения рабочего маршрута сохраните копии обоих конфигов и запланируйте
+через `systemd-run --on-active=180s` восстановление копий и перезапуск Xray,
+затем sing-box. Отменяйте таймер отката после проверки нового SSH-сеанса,
+DNS и сетевых запросов. Для первого запуска на новом VPS вместо восстановления
+можно запланировать остановку TUN.
 
-```bash
-sudo systemctl restart sing-box-tun.service
-sudo systemctl status sing-box-tun.service --no-pager
-```
+Для новой установки подготовьте конфиг из
+[config.example.json](../sing-box/config.example.json) с параметрами своего
+сервера. Разместите готовый файл в `/etc/sing-box/config.json` с правами
+`0600`, установите [unit sing-box](../sing-box/sing-box-tun.service)
+в `/etc/systemd/system/` и выполните `sudo systemctl daemon-reload`.
+Если используется Xray, сначала подготовьте его пул по
+[инструкции установки](sing-box-subscription.md#установка-поверх-работающего-tun).
 
-Если меняется только VLESS outbound, удобно сначала править исходный фрагмент:
+~~~bash
+sudo systemd-run --unit=sing-box-rollback --on-active=180s \
+  /bin/systemctl stop sing-box-tun.service
+sudo systemctl start sing-box-tun.service
 
-```bash
-nano /home/petrovov/planning-bot/sing-box/vless-outbound.json
-python3 -m json.tool /home/petrovov/planning-bot/sing-box/vless-outbound.json >/dev/null
-```
+# Выполните после проверки нового SSH-сеанса и сети.
+sudo systemctl stop sing-box-rollback.timer
+~~~
 
-Это путь из первоначальной ручной установки. Контроллер не читает этот
-фрагмент: он копирует полные конфиги из путей в `inventory.yaml`.
-Изменение фрагмента само по себе не обновляет ни активный конфиг, ни пул.
+## Проверки сети
 
-Важный момент: в host-конфиге outbound должен иметь:
-
-```json
-"tag": "proxy-out"
-```
-
-Потому что `route.final` отправляет обычный трафик именно в outbound
-`proxy-out`.
-
-## Как это работает
-
-На пальцах:
-
-```text
-приложение на сервере
-  -> обычный сетевой запрос
-  -> TUN-интерфейс singtun0
-  -> sing-box
-  -> VLESS/Reality proxy endpoint
-  -> интернет
-```
-
-`TUN` - это виртуальная сетевая карта. Для приложений на сервере все выглядит
-так, будто они просто ходят в интернет. На самом деле пакеты сначала попадают в
-`sing-box`, а он решает, что делать дальше.
-
-В конфиге есть два outbound:
-
-- `proxy-out` - VLESS-подключение к удаленному proxy endpoint;
-- `direct` - обычный прямой выход в интернет без прокси.
-
-`route.final = proxy-out` означает: если правило не сказало иное, отправлять
-трафик через прокси.
-
-DNS настроен отдельно:
-
-```text
-DNS-запрос приложения
-  -> TUN
-  -> sing-box route action hijack-dns
-  -> sing-box dns server google-dns
-  -> ответ приложению
-```
-
-Правило применяется к DNS-пакетам, уже попавшим в TUN. Запрос приложения к
-локальному stub `127.0.0.53:53` может быть доставлен локально; в TUN затем
-попадает запрос самого resolver к внешнему DNS. Поэтому одного наличия
-`hijack-dns` недостаточно, чтобы утверждать, что весь локальный DNS перехвачен:
-нужно учитывать системные маршруты и настройки resolver.
-
-В конфиге используется типизированный UDP DNS-сервер без `detour`:
-его upstream-соединение по умолчанию прямое, независимо от `route.final`.
-См. [DNS UDP](https://sing-box.sagernet.org/configuration/dns/server/udp/).
-
-Direct-исключения нужны, чтобы не сломать сам сервер:
-
-- локальные сети `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`;
-- loopback `127.0.0.0/8`;
-- сеть провайдера VPS;
-- IP SSH-клиента, чтобы не потерять текущую SSH-сессию;
-- IP VLESS-серверов, чтобы соединения к этим адресам, попавшие в TUN,
-  направлялись прямо;
-- DNS-серверы для прямых соединений, не завершённых предыдущим DNS-перехватом.
-
-Кроме списка исключений, `route.auto_detect_interface = true` привязывает
-исходящие соединения sing-box к основному сетевому интерфейсу и предотвращает
-возврат соединения в TUN. Правило `outbound: direct` не равнозначно исключению
-адреса из системных маршрутов TUN. См. [Route](https://sing-box.sagernet.org/configuration/route/).
-
-## Что такое proxy
-
-Proxy - это посредник. Вместо того чтобы сервер шел к Telegram напрямую, он
-идет к proxy endpoint. Endpoint уже сам идет к Telegram и возвращает ответ.
-
-Пример:
-
-```text
-cloud-ru -> proxy endpoint -> api.telegram.org
-```
-
-Для Telegram видно соединение со стороны proxy endpoint, а не напрямую с
-`cloud-ru`.
-
-## Что такое VLESS
-
-VLESS - это протокол проксирования из семейства Xray/V2Ray. В нашем случае
-`sing-box` на `cloud-ru` выступает клиентом VLESS:
-
-```text
-sing-box client -> VLESS server -> нужный сайт
-```
-
-В VLESS outbound важны:
-
-- `server` и `server_port` - куда подключаться;
-- `uuid` - идентификатор клиента;
-- `transport` - как упакован трафик, сейчас используется `grpc`;
-- `tls` - шифрование и маскировка соединения.
-
-## Что такое Reality
-
-Reality - это режим TLS-маскировки. Идея простая: соединение выглядит как
-обычный TLS-трафик к известному домену, например к `discord.com`, но внутри
-используется проверка ключом Reality.
-
-В конфиге это задают поля:
-
-- `tls.server_name` - домен, под который выглядит TLS-соединение;
-- `tls.utls.fingerprint` - имитация TLS-поведения обычного браузера;
-- `tls.reality.public_key` - публичный ключ Reality-сервера;
-- `tls.reality.short_id` - короткий идентификатор Reality-сессии.
-
-Упрощенно:
-
-```text
-обычный TLS снаружи
-VLESS-туннель внутри
-Reality проверяет, что клиент и сервер "свои"
-```
-
-## Проверки
-
-Проверка Telegram с сервера:
-
-```bash
-curl --connect-timeout 8 --max-time 15 \
-  https://api.telegram.org/botINVALID/getMe
-```
-
-Ожидаемый результат при рабочей сети:
-
-```text
-{"ok":false,"error_code":404,"description":"Not Found"}
-```
-
-`404` здесь нормально: токен заведомо неверный, но сам Telegram API доступен.
-
-Проверка маршрутов и TUN:
-
-```bash
-ip route
-ip addr show singtun0
-```
-
-Проверка DNS:
-
-```bash
+~~~bash
+ip -brief link show singtun0
+ss -ltn 'sport = :10808'
 getent hosts api.telegram.org
 resolvectl status
-```
 
-Если `curl` зависает на `Resolving timed out`, сбой произошёл на стадии DNS.
-Это ещё не устанавливает первопричину: проверьте resolver, upstream и
-маршрутизацию. В `/etc/sing-box/config.json` должно быть правило:
+curl --noproxy '*' --max-time 12 -sS -o /dev/null -w '%{http_code}\n' \
+  https://api.telegram.org/botINVALID/getMe
+curl --noproxy '*' --max-time 12 -sS -o /dev/null -w '%{http_code}\n' \
+  https://chatgpt.com/backend-api/codex/responses
+~~~
 
-```json
-{
-  "network": ["udp", "tcp"],
-  "port": 53,
-  "action": "hijack-dns"
-}
-```
+Telegram возвращает `404` с заведомо неверным токеном. Codex может вернуть
+`405` на GET к endpoint, который принимает POST. Такие ответы проверяют
+доступность API. Проверку действующего токена выполняйте через `getMe`, а
+проверку LLM — коротким запросом Hermes от владельца OAuth-сессии.
 
-и секция `dns.servers`.
+Если системный запрос не проходит, сравните его с запросом через локальный
+SOCKS Xray.
 
-## Быстро отключить все
+~~~bash
+curl --noproxy '' --socks5-hostname 127.0.0.1:10808 --max-time 12 \
+  -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
+~~~
 
-Сначала отключите автоматику, иначе очередная проверка может снова запустить
-TUN при применении кандидата:
+## Остановка
 
-```bash
-sudo systemctl disable --now singbox-failover.timer singbox-pool-refresh.timer
-sudo systemctl stop singbox-failover.service singbox-pool-refresh.service
-```
-
-Прерывание уже выполняющегося переключения может оставить файл конфига
-изменённым; перед следующим включением сверяйте его с inventory и состоянием.
-
-```bash
-sudo systemctl stop sing-box-tun.service
-sudo systemctl disable sing-box-tun.service
-```
-
-Если был запущен старый Docker-контейнер:
-
-```bash
-docker stop task-tracker-sing-box
-```
+~~~bash
+sudo systemctl disable --now singbox-pool-refresh.timer singbox-failover.timer
+# Дождитесь завершения запущенных refresh и failover перед остановкой прокси.
+sudo systemctl disable --now sing-box-tun.service xray-provider-pool.service
+~~~

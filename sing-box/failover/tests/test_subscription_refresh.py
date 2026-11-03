@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
@@ -13,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from import_outbounds_catalog import build_candidates, outbound_identity
 from singbox_subscription_refresh import SubscriptionError, parse_subscription_payload
+from xray_transport import activate_pool, build_pool
 
 
 class SubscriptionParserTest(unittest.TestCase):
@@ -146,6 +148,68 @@ class SubscriptionParserTest(unittest.TestCase):
         self.assertTrue(all(config['name'].startswith('cfg-') for config in configs))
         direct_cidrs = documents[configs[0]['name']]['route']['rules'][0]['ip_cidr']
         self.assertEqual(direct_cidrs, ['10.0.0.0/8', '198.51.100.10/32', '2001:db8::10/128'])
+
+
+class XrayPoolTest(unittest.TestCase):
+    def test_balanced_tun_keeps_its_port_when_subscription_changes(self) -> None:
+        catalog, _ = parse_subscription_payload(
+            b'vless://11111111-1111-1111-1111-111111111111@198.51.100.10:443'
+            b'?security=reality&sni=cdn.example&fp=firefox&pbk=public-key&sid=abcd'
+        )
+        outbound = {**catalog['outbounds'][0], 'tag': 'proxy-out'}
+        native = {'outbounds': [outbound]}
+        initial = {'cfg-original': native}
+        _, pool = build_pool(initial, None, native, 'eth0', balancer_port=10808)
+        tun = {'outbounds': [{
+            'type': 'socks', 'tag': 'proxy-out', 'server': '127.0.0.1', 'server_port': 10808,
+        }]}
+        replacement = {'outbounds': [{**outbound, 'server': '198.51.100.11'}]}
+
+        configs, refreshed = build_pool(
+            {'cfg-new': replacement}, pool, tun, 'eth0', balancer_port=10808,
+        )
+
+        self.assertEqual([o['tag'] for o in refreshed['outbounds']], ['cfg-new'])
+        self.assertEqual(refreshed['observatory']['subjectSelector'], ['cfg-new'])
+        self.assertEqual(refreshed['routing']['balancers'][0]['strategy'], {'type': 'leastPing'})
+        self.assertEqual(refreshed['routing']['rules'][-1]['balancerTag'], 'provider-balancer')
+        self.assertEqual(refreshed['inbounds'][-1]['port'], 10808)
+        self.assertNotEqual(configs['cfg-new']['outbounds'][0]['server_port'], 10808)
+
+    def test_refresh_keeps_the_active_channel_after_provider_removal(self) -> None:
+        catalog, _ = parse_subscription_payload(
+            b'vless://11111111-1111-1111-1111-111111111111@198.51.100.10:443'
+            b'?security=reality&sni=cdn.example&fp=firefox&pbk=public-key&sid=abcd'
+        )
+        outbound = {**catalog['outbounds'][0], 'tag': 'proxy-out'}
+        old = {'outbounds': [outbound]}
+        reserve = {'outbounds': [{**outbound, 'server': '198.51.100.11'}]}
+        documents, pool = build_pool({'cfg-live': old, 'cfg-reserve': reserve}, None, old, 'eth0')
+        live = documents['cfg-live']
+
+        refreshed, next_pool = build_pool({'cfg-reserve': reserve}, pool, live, 'eth0')
+
+        self.assertEqual(next_pool, pool)
+        self.assertEqual(refreshed['cfg-reserve'], documents['cfg-reserve'])
+        self.assertEqual(live['outbounds'][0]['type'], 'socks')
+        self.assertEqual(live['outbounds'][0]['server'], '127.0.0.1')
+        self.assertEqual(next_pool['outbounds'][0]['streamSettings']['sockopt']['interface'], 'eth0')
+
+    def test_failed_probe_restores_the_previous_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'provider-pool.json'
+            path.write_text('{"previous": true}\n', encoding='utf-8')
+            with patch('xray_transport.subprocess.run') as run:
+                run.return_value.returncode = 0
+                with self.assertRaisesRegex(SubscriptionError, 'no healthy candidates'):
+                    with activate_pool({'replacement': True}, {'xray_config_path': str(path)}):
+                        self.assertEqual(json.loads(path.read_text()), {'replacement': True})
+                        raise SubscriptionError('no healthy candidates')
+                self.assertEqual(json.loads(path.read_text()), {'previous': True})
+                self.assertEqual(
+                    [call.args[0] for call in run.call_args_list[1:]],
+                    [['systemctl', 'restart', 'xray-provider-pool.service']] * 2,
+                )
 
 
 if __name__ == '__main__':

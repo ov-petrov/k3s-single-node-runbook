@@ -1,145 +1,128 @@
-# Обновление пула sing-box из подписки провайдера
+# Подписка VLESS и обновление пула Xray
 
-Модуль добавляет в failover загрузку списка VLESS-подключений по закрытой
-HTTPS-ссылке. Он подготовлен для URL вида
-'https://connect.sigmavpn.online/access?token=...'. Фактический токен не
-добавлен в репозиторий.
+`singbox_subscription_refresh.py` получает список узлов по закрытой HTTPS-ссылке.
+Поддерживаются текстовый или base64-список VLESS URI, JSON с массивом
+`outbounds` и JSON-массив профилей sing-box. Размер ответа ограничен 4 MiB.
+Адаптер Xray использует VLESS с Reality и преобразует TCP, gRPC и WebSocket.
 
-Ссылка подписки является учётным секретом: тот, кто знает полный URL, может
-получить список подключений и обычно использовать сервис от имени владельца.
-Не передавайте её в Git, shell history, systemd unit, аргументы процесса,
-логи или внешние конвертеры.
+## Хранение секретов
 
-## Что поддержано
-
-singbox_subscription_refresh.py получает ответ только по HTTPS, объёмом не
-более 4 MiB, и принимает четыре вида содержимого:
-
-- base64-кодированный список URI вида vless://...;
-- текстовый список URI vless://..., по одному на строку;
-- JSON с массивом outbounds, где выбраны записи type: vless;
-- JSON-массив готовых профилей sing-box: из каждого профиля берутся записи
-  type: vless. Такой формат возвращает SigmaVPN.
-
-Для VLESS URI поддержаны tcp/raw, grpc и ws, TLS и Reality, включая sni, alpn,
-fp, pbk, sid, flow и packetEncoding.
-
-Clash YAML, VMess, Trojan, Shadowsocks, Hysteria и новые неподдержанные
-транспорты намеренно не преобразуются. Такие строки пропускаются; если в
-ответе не осталось ни одного поддерживаемого VLESS-кандидата, обновление
-считается ошибкой и текущий пул сохраняется. Фактический ответ SigmaVPN уже
-проверен: это JSON-массив готовых профилей sing-box.
-
-## Механика обновления
-
-~~~
-root-only URL file
-  → HTTPS GET с ETag / If-Modified-Since
-  → разбор и дедупликация VLESS
-  → сборка полных TUN-конфигов из base-config.json
-  → sing-box check для каждого нового кандидата
-  → атомарная публикация inventory и каталога
-  → изолированная проверка Telegram + Codex
-  → pool-probe-results.json
-~~~
-
-Скрипт использует одну неблокирующую блокировку
-'/run/singbox-failover.lock' вместе с контроллером failover. Если контроллер
-выполняет full probe или переключение, обновление подписки завершается без
-изменений. Если обновление идёт первым, очередной failover завершается как
-'lock_busy', не читая inventory в момент его замены.
-
-Серверы с доменным именем перед генерацией резолвятся в IPv4/IPv6 адреса и
-добавляются в direct-исключения TUN. Если имя не резолвится, новый набор не
-публикуется. Это не допускает петлю, когда подключение к VLESS-серверу пытается
-пройти через самого себя.
-
-Имена кандидатов строятся из SHA-256 нормализованного outbound, без его
-отображаемого тега. Поэтому перестановка серверов или переименование локации у
-провайдера не сбрасывает историю здоровья и cooldown. Старые сгенерированные
-файлы не удаляются автоматически: новый inventory публикуется только после
-записи и проверки всех новых файлов.
-
-Перед публикацией скрипт сравнивает живой proxy-out с новыми кандидатами по
-полному содержимому outbound. Если текущий маршрут не совпадает ни с одним из
-новых, его полный конфиг сохраняется как отключённый кандидат active-.... Он
-позволяет контроллеру продолжать проверять работающий маршрут, но никогда не
-выбирается как новый резерв. Это исключает немедленное переключение только
-из-за изменения подписки.
-
-HTTP 304 Not Modified не перестраивает inventory, но при --refresh-pool всё
-равно заново проверяет известных кандидатов. При ошибке скачивания,
-пустом/неподдерживаемом ответе, ошибке DNS, sing-box check или pool probe
-скрипт возвращает ошибку и оставляет прежние inventory, metadata и результаты
-пула как есть.
-
-## Защищённый URL-файл
-
-Реальный URL хранится одной строкой в файле, доступном только root:
-
-~~~
-/etc/singbox-failover/subscription.url
-~~~
-
-Формат файла — полный HTTPS URL либо строка
-'SUBSCRIPTION_URL=<полный HTTPS URL>'. Пример без секрета:
+Храните полный URL подписки в `/etc/singbox-failover/subscription.url` с
+владельцем root и правами `0600`. Формат файла указан в
 [subscription.url.example](../sing-box/failover/templates/subscription.url.example).
+URL читает сам скрипт из файла. Telegram-токен задаётся через защищённый
+`failover.env`, который systemd читает как `EnvironmentFile`.
 
-Скрипт читает файл сам. URL не передаётся через EnvironmentFile, что не
-добавляет его в окружение дочерних процессов, и не записывается в stdout,
-journal, inventory, metadata или каталог кандидатов. Metadata содержит только
-ETag, Last-Modified, SHA-256 ответа и время скачивания.
+Конфиги VLESS, каталог подписки и `/etc/xray/provider-pool.json` содержат
+параметры доступа. Держите их вне Git вместе с журналами проверок,
+файлами OAuth и резервными копиями.
 
-## Подготовленные файлы
+## Схема обновления
 
-- [singbox_subscription_refresh.py](../sing-box/failover/scripts/singbox_subscription_refresh.py)
-- [import_outbounds_catalog.py](../sing-box/failover/scripts/import_outbounds_catalog.py)
-- [обновлённый unit refresh](../sing-box/failover/templates/singbox-pool-refresh.service)
-- [inventory.example.yaml](../sing-box/failover/templates/inventory.example.yaml)
-- [subscription.url.example](../sing-box/failover/templates/subscription.url.example)
+1. Refresh берёт блокировку `/run/singbox-failover.lock`, скачивает подписку,
+   разбирает список и присваивает профилям устойчивые идентификаторы.
+2. Из базового TUN-конфига строятся кандидаты с выделенными локальными
+   SOCKS-портами. Скрипт проверяет кандидатов через `sing-box check` и пул
+   через `xray run -test`.
+3. Если пул изменился, скрипт атомарно заменяет файл Xray и перезапускает
+   сервис. При запуске с `--refresh-pool` отдельно проверяются Telegram
+   `getMe` и доступность Codex через каждого кандидата. Если ни один не
+   проходит или проверка завершается ошибкой, скрипт возвращает прежний пул.
+4. После проверки публикуются результаты, каталог и inventory. Метаданные
+   загрузки сохраняются после публикации inventory. При HTTP 304 скрипт
+   повторяет проверку известных кандидатов с `--refresh-pool`.
 
-base-config.json — стабильный базовый TUN-конфиг без конкретного proxy-out.
-Его не следует подменять текущим '/etc/sing-box/config.json' после каждого
-failover: иначе свойства ранее выбранного сервера могут стать частью базы.
-Реальный base config, generated-каталог, subscription metadata и полный
-каталог provider outbounds должны быть закрыты от других пользователей.
+Имя кандидата зависит от параметров VLESS, поэтому смена отображаемой метки
+провайдера сохраняет его идентификатор. Сервис refresh не заменяет
+`/etc/sing-box/config.json`.
 
-Шаблон singbox-pool-refresh.service теперь вызывает refresh-скрипт с
---refresh-pool; расписание остаётся 12-часовым. При необходимости частоту можно
-уменьшить до 6 часов после проверки лимитов SigmaVPN. Более частые запросы не
-улучшают failover: они лишь обновляют список кандидатов; доступность живого
-маршрута контролируется отдельным пяти-минутным timer.
+## Балансировка
 
-## Внедрение на cloud-ru
+Sing-box направляет обычный трафик на общий SOCKS-порт `127.0.0.1:10808`.
+Xray проверяет выходы через `observatory` с интервалом 30 секунд и отправляет
+новые соединения через доступный узел с наименьшей измеренной задержкой
+(`leastPing`). Если измерений ещё нет или ни один выход не прошёл проверку,
+Xray пробует первый профиль из подписки. Проверка использует HTTPS-запрос к
+`www.gstatic.com/generate_204`. Проверки Telegram и Codex при обновлении пула
+выполняются отдельно и не определяют выбор балансировщика.
 
-Внедрение требует реального URL и отдельного окна обслуживания: старые файлы
-сейчас находятся в '/home/petrovov/configs', а новые шаблоны используют
-'/opt/singbox-failover'. Смешивать эти два дерева без переноса inventory,
-base-config, state и systemd units нельзя.
+[Проверки Xray](https://xtls.github.io/en/config/observatory.html)
+· [Балансировщик Xray](https://xtls.github.io/en/config/routing.html#balancerobject)
 
-Перед включением нужно:
+## Установка поверх работающего TUN
 
-1. Разместить скрипты и базовый конфиг в одном root-controlled каталоге.
-2. Создать URL-файл с правами 0600, не выводя его содержимое в терминал.
-3. Скопировать runtime-параметры, включая Telegram/Hermes env, в новый
-   inventory и unit.
-4. Запустить refresh вручную с остановленным failover timer и убедиться, что
-   сформирован хотя бы один здоровый резервный кандидат.
-5. Только затем заменить pool-refresh unit, перезагрузить systemd и включить
-   timer.
+Нужны Python 3.10+, PyYAML, curl и официальные бинарники
+`/usr/local/bin/sing-box` и `/usr/local/bin/xray`. Шаблоны используют
+`/opt/singbox-failover`. Для существующей установки задайте её реальные пути
+вместо этого каталога во всех связанных файлах.
 
-Автоматическая замена '/etc/sing-box/config.json' в этом процессе не
-выполняется: refresh создаёт и проверяет кандидаты изолированно. Основной TUN
-изменит только failover при подтверждённом сбое текущего маршрута.
+1. Разместите [скрипты](../sing-box/failover/scripts/) в каталоге, доступном
+   для записи только root. Подготовьте файл подписки, закрытый env и
+   `base-config.json` со своими правилами DNS и direct-исключениями.
+   [Инструкция по TUN](sing-box-host-proxy.md)
+2. Адаптируйте [пример inventory](../sing-box/failover/templates/inventory.example.yaml).
+   В новой установке задайте `configs: []`. Укажите имя физического интерфейса
+   вместо `eth0` и выберите свободный порт вне диапазона кандидатов 20000–29999.
+
+   ~~~yaml
+   runtime:
+     transport_backend: xray
+     xray_config_path: /etc/xray/provider-pool.json
+     xray_outbound_interface: eth0
+     xray_balancer_port: 10808
+   ~~~
+
+3. Создайте каталог `/etc/xray` с владельцем root и правами `0750`.
+   Установите [сервис Xray](../sing-box/failover/templates/xray-provider-pool.service),
+   [сервис обновления](../sing-box/failover/templates/singbox-pool-refresh.service)
+   и [таймер](../sing-box/failover/templates/singbox-pool-refresh.timer).
+   Для `singbox-pool-refresh.service` добавьте drop-in.
+
+   ~~~ini
+   [Service]
+   ReadWritePaths=/etc/xray
+   ~~~
+
+   Для `sing-box-tun.service` добавьте зависимость от Xray.
+
+   ~~~ini
+   [Unit]
+   Wants=xray-provider-pool.service
+   After=xray-provider-pool.service
+   ~~~
+
+4. Остановите старый таймер переключения и дождитесь завершения контроллера.
+   Перечитайте units через `systemctl daemon-reload` и вручную запустите
+   `singbox-pool-refresh.service`. Для первого обновления после смены backend
+   сохраните прежние метаданные отдельно, чтобы refresh скачал полный список.
+   Проверьте, что он создал пул и общий SOCKS-порт отвечает.
+5. В живом конфиге TUN замените `proxy-out` на SOCKS-выход. Сохраните
+   `route.final`, DNS и direct-правила. Проверьте конфиг и перезапустите
+   TUN с [автоматическим откатом](sing-box-host-proxy.md#управление).
+
+   ~~~json
+   {
+     "type": "socks",
+     "tag": "proxy-out",
+     "server": "127.0.0.1",
+     "server_port": 10808,
+     "version": "5",
+     "bind_interface": "lo"
+   }
+   ~~~
+
+6. После проверки нового SSH-сеанса и сетевого доступа включите автозапуск
+   `xray-provider-pool.service` и `sing-box-tun.service`, затем запустите
+   `systemctl enable --now singbox-pool-refresh.timer`. Таймер обновляет
+   подписку каждые 12 часов. Для переключения профилей используется Xray.
 
 ## Проверка исходников
 
-~~~
+~~~bash
 cd sing-box/failover
 shasum -a 256 -c SHA256SUMS
-python3 -m unittest discover -s tests -v
-python3 scripts/singbox_subscription_refresh.py --help
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ~~~
 
-Тесты используют фиктивные UUID, ключи Reality и адреса из документации; они
-не делают сетевых запросов и не требуют настоящего URL подписки.
+Тесты используют фиктивные параметры VLESS и адреса из документационных
+диапазонов.

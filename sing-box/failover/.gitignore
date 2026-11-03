@@ -7,6 +7,7 @@ pool-probe-results.json
 subscription.url
 subscription-catalog.json
 subscription-metadata.json
+provider-pool.json
 base-config.json
 configs*.json
 generated/

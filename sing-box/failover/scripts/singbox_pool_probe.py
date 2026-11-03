@@ -40,8 +40,6 @@ def build_probe_config(candidate_path: Path, port: int, workdir: Path) -> Path:
         'tag': 'probe-in',
         'listen': '127.0.0.1',
         'listen_port': port,
-        'sniff': True,
-        'sniff_override_destination': False,
     }]
     data.setdefault('route', {})['auto_detect_interface'] = True
     out = workdir / f'{candidate_path.stem}.probe.json'
@@ -62,9 +60,10 @@ def wait_port(port: int, timeout: float = 8.0) -> bool:
 
 def check_telegram(proxy_url: str, token: str, timeout_seconds: int) -> dict[str, Any]:
     started = time.monotonic()
-    cmd = ['curl', '-sS', '--max-time', str(timeout_seconds), '--proxy', proxy_url, f'https://api.telegram.org/bot{token}/getMe']
+    cmd = ['curl', '-sS', '--max-time', str(timeout_seconds), '--proxy', proxy_url, '--config', '-']
+    config = 'url=' + json.dumps(f'https://api.telegram.org/bot{token}/getMe') + '\n'
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds + 10)
+        res = subprocess.run(cmd, input=config, capture_output=True, text=True, timeout=timeout_seconds + 10)
     except subprocess.TimeoutExpired:
         latency_ms = int((time.monotonic() - started) * 1000)
         return {'ok': False, 'latency_ms': latency_ms, 'error': f'telegram timeout after {timeout_seconds}s', 'body_preview': None}
@@ -137,8 +136,10 @@ def main() -> int:
     parser.add_argument('--timeout', type=int, default=10)
     parser.add_argument('--codex-timeout', type=int, default=90)
     parser.add_argument('--openai-mode', choices=['transport', 'full'], default='transport')
-    parser.add_argument('--out', default='/home/petrovov/configs/pool-probe-results.json')
+    parser.add_argument('--out', type=Path, help='default: pool-probe-results.json beside the inventory')
     args = parser.parse_args()
+    inventory_path = Path(args.inventory)
+    output_path = args.out or inventory_path.parent / 'pool-probe-results.json'
 
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not token:
@@ -148,7 +149,7 @@ def main() -> int:
     if args.openai_mode == 'full' and not codex_command:
         raise SystemExit('OPENAI_CHECK_COMMAND is not set for full mode')
 
-    inv = load_yaml(Path(args.inventory))
+    inv = load_yaml(inventory_path)
     configs = [cfg for cfg in inv['configs'] if cfg.get('enabled', True)]
     if args.config:
         configs = [cfg for cfg in configs if cfg['name'] == args.config]
@@ -210,9 +211,9 @@ def main() -> int:
                         proc.kill()
                         proc.wait(timeout=5)
 
-    Path(args.out).write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    output_path.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     healthy = [r for r in results if r['healthy']]
-    print(json.dumps({'checked': len(results), 'healthy': len(healthy), 'out': args.out, 'openai_mode': args.openai_mode}, ensure_ascii=False))
+    print(json.dumps({'checked': len(results), 'healthy': len(healthy), 'out': str(output_path), 'openai_mode': args.openai_mode}, ensure_ascii=False))
     return 0
 
 

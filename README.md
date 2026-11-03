@@ -6,9 +6,9 @@
 Инструкция рассчитана на новый VPS с Ubuntu 24.04 и содержит воспроизводимые
 команды, пояснения, диагностику и проверку self-healing.
 
-Сопутствующий модуль: [sing-box — TUN-прокси и автоматическое переключение
-маршрутов](sing-box/README.md). [Механика failover и рабочие скрипты](docs/sing-box-failover.md).
-[Обновление списка серверов из подписки](docs/sing-box-subscription.md).
+Модуль прокси для VPS описывает [системный TUN в sing-box и балансировку в Xray](sing-box/README.md).
+Отдельные инструкции охватывают [обновление подписки](docs/sing-box-subscription.md)
+и [прежний контроллер переключения](docs/sing-box-failover.md).
 
 ## Оглавление
 
@@ -544,8 +544,7 @@ done
 - single-node Kafka в KRaft-режиме;
 - PostgreSQL;
 - Apache ActiveMQ Artemis как легкий JMS-брокер;
-- интеграционный сервис из образа
-  `opetrov2019/kafka-mq-integration-service:integration-latest`;
+- интеграционный сервис из образа, указанного в манифесте;
 - ClusterIP Services и persistent volumes для Kafka, PostgreSQL и ActiveMQ.
 
 IBM MQ, Kafka Connect и tracing collector в этот учебный стенд не входят.

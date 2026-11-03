@@ -20,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -34,6 +34,7 @@ from import_outbounds_catalog import (
     outbound_identity,
     write_candidates,
 )
+from xray_transport import activate_pool, build_pool, load_pool
 
 
 MAX_SUBSCRIPTION_BYTES = 4 * 1024 * 1024
@@ -424,14 +425,14 @@ def run_pool_probe(
 
 def refresh(args: argparse.Namespace) -> int:
     inventory_path = Path(args.inventory)
-    document = load_yaml(inventory_path)
-    runtime = document['runtime']
     metadata_path = Path(args.metadata_path)
     with exclusive_lock(Path(args.lock_path)) as acquired:
         if not acquired:
             log('subscription_refresh_skipped', reason='lock_busy')
             return 0
 
+        document = load_yaml(inventory_path)
+        runtime = document['runtime']
         metadata = load_metadata(metadata_path)
         subscription_url = read_subscription_url(Path(args.subscription_url_file))
         body, remote_metadata = download_subscription(
@@ -454,12 +455,24 @@ def refresh(args: argparse.Namespace) -> int:
         except (OSError, json.JSONDecodeError, CatalogError) as exc:
             raise SubscriptionError(f'candidate generation failed: {exc}') from exc
 
-        preserve_active_config(
-            configs,
-            candidate_documents,
-            Path(runtime.get('active_config_path', '/etc/sing-box/config.json')),
-            Path(args.generated_dir),
-        )
+        xray_pool = None
+        backend = runtime.get('transport_backend', 'sing-box')
+        active_config_path = Path(runtime.get('active_config_path', '/etc/sing-box/config.json'))
+        balancer_port = None
+        if backend == 'xray':
+            balancer_port = runtime.get('xray_balancer_port')
+            candidate_documents, xray_pool = build_pool(
+                candidate_documents,
+                load_pool(Path(runtime['xray_config_path'])),
+                json.loads(active_config_path.read_text(encoding='utf-8')),
+                str(runtime.get('xray_outbound_interface', '')),
+                balancer_port=balancer_port,
+            )
+        elif backend != 'sing-box':
+            raise SubscriptionError(f'unsupported transport backend: {backend}')
+
+        if balancer_port is None:
+            preserve_active_config(configs, candidate_documents, active_config_path, Path(args.generated_dir))
         write_candidates(candidate_documents, Path(args.generated_dir))
         check_candidates(configs, runtime)
 
@@ -472,38 +485,29 @@ def refresh(args: argparse.Namespace) -> int:
             'content_sha256': content_sha256,
             'fetched_at': utc_now(),
         }
-        if args.refresh_pool:
-            configured_output = runtime.get('pool_results_path')
-            if not isinstance(configured_output, str) or not configured_output:
-                raise SubscriptionError('runtime.pool_results_path is not configured')
-            configured_output_path = Path(configured_output)
-            configured_output_path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix='singbox-subscription-', dir=inventory_path.parent) as temporary_dir:
-                temporary_root = Path(temporary_dir)
-                temporary_inventory = temporary_root / 'inventory.yaml'
-                temporary_pool = temporary_root / 'pool-probe-results.json'
-                atomic_write_text(temporary_inventory, inventory_payload)
-                checked, healthy = run_pool_probe(temporary_inventory, runtime, len(configs), temporary_pool)
-                if healthy == 0:
-                    raise SubscriptionError('new subscription has no healthy candidates')
-                atomic_write_text(inventory_path, inventory_payload)
+        transport = activate_pool(xray_pool, runtime) if xray_pool is not None else nullcontext()
+        with tempfile.TemporaryDirectory(prefix='singbox-subscription-', dir=inventory_path.parent) as directory:
+            with transport:
+                if args.refresh_pool:
+                    configured_output = runtime.get('pool_results_path')
+                    if not isinstance(configured_output, str) or not configured_output:
+                        raise SubscriptionError('runtime.pool_results_path is not configured')
+                    temporary_inventory = Path(directory) / 'inventory.yaml'
+                    temporary_pool = Path(directory) / 'pool-probe-results.json'
+                    atomic_write_text(temporary_inventory, inventory_payload)
+                    checked, healthy = run_pool_probe(temporary_inventory, runtime, len(configs), temporary_pool)
+                    if healthy == 0:
+                        raise SubscriptionError('new subscription has no healthy candidates')
+                    atomic_write_text(Path(configured_output), temporary_pool.read_text(encoding='utf-8'))
                 atomic_write_text(Path(args.catalog_path), catalog_payload)
-                atomic_write_text(metadata_path, json.dumps(next_metadata, ensure_ascii=False, indent=2) + '\n')
-                temporary_pool.chmod(0o600)
-                temporary_pool.replace(configured_output_path)
-                log(
-                    'subscription_published',
-                    configs=len(configs),
-                    healthy=healthy,
-                    source_format=summary['format'],
-                    skipped=summary['skipped'],
-                )
-                log('pool_refreshed', checked=checked, healthy=healthy, source_changed=True)
-        else:
-            atomic_write_text(inventory_path, inventory_payload)
-            atomic_write_text(Path(args.catalog_path), catalog_payload)
-            atomic_write_text(metadata_path, json.dumps(next_metadata, ensure_ascii=False, indent=2) + '\n')
-            log('subscription_published', configs=len(configs), source_format=summary['format'], skipped=summary['skipped'])
+                # The inventory is the commit point for the Xray channel mapping.
+                atomic_write_text(inventory_path, inventory_payload)
+
+        # If metadata publication fails, the next refresh can fetch the same data again.
+        atomic_write_text(metadata_path, json.dumps(next_metadata, ensure_ascii=False, indent=2) + '\n')
+        log('subscription_published', configs=len(configs), source_format=summary['format'], skipped=summary['skipped'])
+        if args.refresh_pool:
+            log('pool_refreshed', checked=checked, healthy=healthy, source_changed=True)
     return 0
 
 

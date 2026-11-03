@@ -1,28 +1,22 @@
-# Автоматическое переключение sing-box: фактическая механика
+# Переключение через контроллер sing-box
 
-Срез от **10 сентября 2026 года**. Документ составлен по рабочим скриптам,
-systemd units, параметрам inventory и обезличенному состоянию на `cloud-ru`.
-Он описывает существующую реализацию, включая её ограничения. Проверка была
-только чтением: переключения, перезапуски, full probe и отправка уведомлений
-при подготовке документа не выполнялись.
+Эта страница описывает прежний режим, в котором контроллер выбирает кандидат,
+копирует его конфигурацию и перезапускает TUN. В текущей схеме переключением
+управляет Xray. При включённом `runtime.xray_balancer_port` контроллер
+завершается с событием `switching_managed_by_xray`.
 
-Базовая маршрутизация и команды управления TUN:
-[sing-box host proxy](sing-box-host-proxy.md). Шаблон TUN:
-[config.example.json](../sing-box/config.example.json).
-Получение кандидатов по закрытой ссылке провайдера описано в
-[sing-box subscription](sing-box-subscription.md).
+Для текущей настройки используйте [управление TUN и Xray](sing-box-host-proxy.md)
+и [обновление подписки](sing-box-subscription.md).
 
-> Этот документ фиксирует состояние cloud-ru на 10 сентября 2026 года.
-> Репозиторий с тех пор получил singbox_subscription_refresh.py, устойчивые
-> идентификаторы кандидатов и общую блокировку с failover. Они не изменяют
-> работающий сервер, пока не будут отдельно развёрнуты.
+Разделы ниже описывают механику и результаты обследования на 10 сентября
+2026 года. Для размещения файлов приведены переносимые примеры.
 
 ## Состав механизма и исходники
 
 | Компонент | Назначение |
 | --- | --- |
 | [import_outbounds_catalog.py](../sing-box/failover/scripts/import_outbounds_catalog.py) | Собрать полные конфиги кандидатов из базового конфига и каталога outbound |
-| [singbox_subscription_refresh.py](../sing-box/failover/scripts/singbox_subscription_refresh.py) | Получить VLESS-подписку, валидировать и опубликовать новый inventory перед проверкой пула |
+| [singbox_subscription_refresh.py](../sing-box/failover/scripts/singbox_subscription_refresh.py) | Получить VLESS-подписку и проверить кандидатов перед публикацией inventory |
 | [singbox_pool_probe.py](../sing-box/failover/scripts/singbox_pool_probe.py) | Проверить кандидатов через отдельные локальные прокси, записать результаты пула |
 | [singbox_failover.py](../sing-box/failover/scripts/singbox_failover.py) | Проверить основной маршрут, выбрать и применить замену при сбое |
 | `inventory.yaml` | Кандидаты, приоритеты, команды и параметры контроллера |
@@ -31,36 +25,12 @@ systemd units, параметрам inventory и обезличенному со
 | `state.json` | Активный кандидат, счётчики ошибок, cooldown, история переключений |
 | `failover.log` и journal | JSON-события контроллера и вывод systemd-запусков |
 
-Три исходных скрипта были скопированы с сервера. Версии в репозитории включают
-доработки и новый refresh-скрипт, поэтому они не являются побайтной копией
-текущих файлов cloud-ru. Контрольные суммы файлов, опубликованных в этом
-репозитории, сохранены в
+Контрольные суммы исходников находятся в
 [SHA256SUMS](../sing-box/failover/SHA256SUMS).
-Реальные конфиги подключений, токены, env, inventory, state и логи не публикуются.
-
-На `cloud-ru` используются пути:
-
-```text
-/usr/local/bin/sing-box
-/etc/sing-box/config.json
-/etc/systemd/system/sing-box-tun.service
-/etc/systemd/system/singbox-failover.{service,timer}
-/etc/systemd/system/singbox-pool-refresh.{service,timer}
-/home/petrovov/.hermes/skills/software-development/sing-box-api-failover/scripts/
-/home/petrovov/configs/inventory.yaml
-/home/petrovov/configs/failover.env
-/home/petrovov/configs/generated/
-/home/petrovov/configs/state.json
-/home/petrovov/configs/pool-probe-results.json
-/home/petrovov/configs/failover.log
-```
-
-Это внешние серверные пути, не каталоги данного репозитория. Примеры для
-переноса установки размещены в
-[failover/templates](../sing-box/failover/templates/) и используют
-`/opt/singbox-failover`. В самих исходных скриптах некоторые значения по
-умолчанию по-прежнему указывают на `/home/petrovov/configs`; при переносе
-нужно явно передавать пути через CLI и inventory.
+[Шаблоны](../sing-box/failover/templates/) размещают скрипты и рабочие файлы
+в `/opt/singbox-failover`. Реальные конфиги, токены, inventory, состояние и
+логи хранятся вне репозитория. При переносе установки задавайте рабочие пути
+через CLI и inventory.
 
 ## Путь сетевого запроса
 
@@ -231,7 +201,7 @@ Transport-проверки не генерируют LLM-ответы. HTTP `403
 
 Это интервальные systemd timers, не фиксированные часы календаря. На сервере
 оба сервиса — `Type=oneshot`, без `User=`, то есть запускаются от root.
-`HOME=/home/petrovov` и `HERMES_HOME=/home/petrovov/.hermes` задают пути, но не
+`HOME=/home/<USER>` и `HERMES_HOME=/home/<USER>/.hermes` задают пути, но не
 меняют пользователя процесса. Full probe также запускает Hermes от root и
 может создавать root-owned файлы в пользовательском хранилище.
 
@@ -292,8 +262,7 @@ Transport-проверки не генерируют LLM-ответы. HTTP `403
 
 Зависимости скриптов: Python 3.10+, PyYAML, `curl`, `/usr/local/bin/sing-box` и
 systemd для применения. Для full probe нужна рабочая команда Hermes с доступом
-к соответствующему auth store. Синтаксис probe-конфига соответствует снимку
-sing-box 1.12.20; совместимость с другими версиями здесь не проверялась.
+к соответствующему auth store. Probe-конфиг использует локальный mixed inbound без устаревших полей sniff.
 
 Примеры:
 

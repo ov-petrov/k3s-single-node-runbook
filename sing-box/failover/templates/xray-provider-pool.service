@@ -1,0 +1,20 @@
+[Unit]
+Description=Xray provider profiles on localhost SOCKS ports
+After=network-online.target
+Wants=network-online.target
+Before=sing-box-tun.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xray run -config /etc/xray/provider-pool.json
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+CapabilityBoundingSet=CAP_NET_RAW
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

@@ -1,4 +1,4 @@
-# Пример для /opt/singbox-failover; это не реальный inventory cloud-ru.
+# Пример для /opt/singbox-failover.
 configs:
   - name: cfg-00
     path: /opt/singbox-failover/generated/00-primary.json
@@ -11,6 +11,11 @@ configs:
     enabled: true
     source_outbound_tag: reserve
 runtime:
+  # Раскомментируйте для балансировки в Xray и укажите физический интерфейс.
+  # transport_backend: xray
+  # xray_config_path: /etc/xray/provider-pool.json
+  # xray_outbound_interface: eth0
+  # xray_balancer_port: 10808
   active_config_path: /etc/sing-box/config.json
   switch_method: copy-and-restart
   singbox_service_name: sing-box-tun

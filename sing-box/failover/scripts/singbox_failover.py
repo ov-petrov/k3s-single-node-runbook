@@ -65,7 +65,9 @@ class FailoverManager:
         self.configs = self.inventory['configs']
         self.state_path = Path(self.runtime['state_path'])
         self.log_path = Path(self.runtime['log_path'])
-        self.pool_results_path = Path(self.runtime.get('pool_results_path', '/home/petrovov/configs/pool-probe-results.json'))
+        self.pool_results_path = Path(
+            self.runtime.get('pool_results_path', inventory_path.parent / 'pool-probe-results.json')
+        )
         self.pool_refresh_max_age_seconds = int(self.runtime.get('pool_refresh_max_age_seconds', 43200))
         self.pool_probe_script = self.runtime.get('pool_probe_script')
         self.active_openai_mode = self.runtime.get('active_openai_mode', 'transport')
@@ -76,6 +78,9 @@ class FailoverManager:
         self.require_both = bool(self.runtime.get('require_both_apis', True))
 
     def run(self) -> int:
+        if self.runtime.get('transport_backend') == 'xray' and self.runtime.get('xray_balancer_port'):
+            self._log('switching_managed_by_xray')
+            return 0
         detected_active_name = self._detect_active_name()
         state_active_name = self.state.get('active_name')
         active_name = detected_active_name or state_active_name
