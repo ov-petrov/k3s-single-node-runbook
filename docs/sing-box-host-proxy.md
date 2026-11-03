@@ -41,8 +41,7 @@ sudo journalctl -u sing-box-tun.service -u xray-provider-pool.service -n 50 --no
 ~~~
 
 При ручной работе с конфигами остановите таймер обновления и дождитесь
-завершения текущего запуска `singbox-pool-refresh.service`. В установках с
-прежним контроллером то же относится к `singbox-failover.timer` и его сервису.
+завершения текущего запуска `singbox-pool-refresh.service`.
 
 Проверьте подготовленные конфиги перед применением.
 
@@ -104,7 +103,7 @@ curl --noproxy '' --socks5-hostname 127.0.0.1:10808 --max-time 12 \
 ## Остановка
 
 ~~~bash
-sudo systemctl disable --now singbox-pool-refresh.timer singbox-failover.timer
-# Дождитесь завершения запущенных refresh и failover перед остановкой прокси.
+sudo systemctl disable --now singbox-pool-refresh.timer
+# Дождитесь завершения обновления подписки перед остановкой прокси.
 sudo systemctl disable --now sing-box-tun.service xray-provider-pool.service
 ~~~

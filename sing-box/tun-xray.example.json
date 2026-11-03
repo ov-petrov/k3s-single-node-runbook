@@ -1,0 +1,76 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "singtun0",
+      "address": [
+        "172.31.255.1/30"
+      ],
+      "mtu": 9000,
+      "auto_route": true,
+      "strict_route": true,
+      "stack": "system"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "socks",
+      "tag": "proxy-out",
+      "server": "127.0.0.1",
+      "server_port": 10808,
+      "version": "5",
+      "bind_interface": "lo"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "proxy-out",
+    "rules": [
+      {
+        "network": [
+          "udp",
+          "tcp"
+        ],
+        "port": 53,
+        "action": "hijack-dns"
+      },
+      {
+        "ip_cidr": [
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "224.0.0.0/4",
+          "240.0.0.0/4",
+          "8.8.8.8/32",
+          "8.8.4.4/32"
+        ],
+        "outbound": "direct"
+      }
+    ]
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "udp",
+        "tag": "google-dns",
+        "server": "8.8.8.8",
+        "server_port": 53
+      }
+    ],
+    "final": "google-dns",
+    "strategy": "ipv4_only",
+    "disable_cache": false
+  }
+}

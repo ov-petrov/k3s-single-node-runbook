@@ -8,7 +8,8 @@
 
 Модуль прокси для VPS описывает [системный TUN в sing-box и балансировку в Xray](sing-box/README.md).
 Отдельные инструкции охватывают [обновление подписки](docs/sing-box-subscription.md)
-и [прежний контроллер переключения](docs/sing-box-failover.md).
+и [восстановление на чистом VPS](docs/sing-box-recovery.md).
+Для Hermes есть [настройка панели через SSH и установка скилла диагностики](docs/hermes-dashboard.md).
 
 ## Оглавление
 

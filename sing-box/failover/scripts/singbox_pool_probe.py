@@ -107,35 +107,12 @@ def check_openai_transport(proxy_url: str, url: str, timeout_seconds: int) -> di
     return {'ok': ok, 'latency_ms': latency_ms, 'error': None if ok else f'unexpected http code: {code}', 'http_code': code_int}
 
 
-def check_codex_full(proxy_url: str, command: str, timeout_seconds: int) -> dict[str, Any]:
-    started = time.monotonic()
-    env = os.environ.copy()
-    env['ALL_PROXY'] = proxy_url
-    env['HTTPS_PROXY'] = proxy_url
-    env['HTTP_PROXY'] = proxy_url
-    try:
-        res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout_seconds, env=env)
-        latency_ms = int((time.monotonic() - started) * 1000)
-        ok = res.returncode == 0
-        return {
-            'ok': ok,
-            'latency_ms': latency_ms,
-            'error': None if ok else ((res.stderr or res.stdout or 'codex command failed')[-400:]),
-            'stdout_preview': (res.stdout or '')[:120] if ok else None,
-        }
-    except subprocess.TimeoutExpired:
-        latency_ms = int((time.monotonic() - started) * 1000)
-        return {'ok': False, 'latency_ms': latency_ms, 'error': f'codex command timeout after {timeout_seconds}s', 'stdout_preview': None}
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description='Probe sing-box candidate configs in isolated localhost mode')
     parser.add_argument('--inventory', required=True)
     parser.add_argument('--config', help='probe only one config by name')
     parser.add_argument('--port-base', type=int, default=2080)
     parser.add_argument('--timeout', type=int, default=10)
-    parser.add_argument('--codex-timeout', type=int, default=90)
-    parser.add_argument('--openai-mode', choices=['transport', 'full'], default='transport')
     parser.add_argument('--out', type=Path, help='default: pool-probe-results.json beside the inventory')
     args = parser.parse_args()
     inventory_path = Path(args.inventory)
@@ -145,9 +122,6 @@ def main() -> int:
     if not token:
         raise SystemExit('TELEGRAM_BOT_TOKEN is not set')
     transport_url = os.getenv('OPENAI_TRANSPORT_URL', 'https://chatgpt.com/backend-api/codex')
-    codex_command = os.getenv('OPENAI_CHECK_COMMAND')
-    if args.openai_mode == 'full' and not codex_command:
-        raise SystemExit('OPENAI_CHECK_COMMAND is not set for full mode')
 
     inv = load_yaml(inventory_path)
     configs = [cfg for cfg in inv['configs'] if cfg.get('enabled', True)]
@@ -181,18 +155,15 @@ def main() -> int:
                         'server': cfg.get('server'),
                         'probe_started': False,
                         'telegram': {'ok': False, 'error': 'probe port not opened'},
-                        'openai': {'ok': False, 'error': 'probe port not opened', 'mode': args.openai_mode},
+                        'openai': {'ok': False, 'error': 'probe port not opened', 'mode': 'transport'},
                         'healthy': False,
                         'startup_error': stderr or None,
                     })
                     continue
 
                 tg = check_telegram(proxy_url, token, args.timeout)
-                if args.openai_mode == 'full':
-                    oa = check_codex_full(proxy_url, codex_command, args.codex_timeout)
-                else:
-                    oa = check_openai_transport(proxy_url, transport_url, args.timeout)
-                oa['mode'] = args.openai_mode
+                oa = check_openai_transport(proxy_url, transport_url, args.timeout)
+                oa['mode'] = 'transport'
                 results.append({
                     'name': cfg['name'],
                     'tag': cfg.get('source_outbound_tag') or cfg.get('tags', [''])[0],
@@ -213,7 +184,7 @@ def main() -> int:
 
     output_path.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     healthy = [r for r in results if r['healthy']]
-    print(json.dumps({'checked': len(results), 'healthy': len(healthy), 'out': str(output_path), 'openai_mode': args.openai_mode}, ensure_ascii=False))
+    print(json.dumps({'checked': len(results), 'healthy': len(healthy), 'out': str(output_path), 'openai_mode': 'transport'}, ensure_ascii=False))
     return 0
 
 

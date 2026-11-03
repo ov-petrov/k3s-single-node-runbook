@@ -1,0 +1,13 @@
+[Unit]
+Description=Hermes management dashboard on loopback
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.hermes
+Environment=HERMES_HOME=%h/.hermes
+ExecStart=%h/.local/bin/hermes dashboard --host 127.0.0.1 --port 9119 --no-open --skip-build
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

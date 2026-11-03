@@ -401,7 +401,6 @@ def run_pool_probe(
         sys.executable,
         script,
         '--inventory', str(inventory_path),
-        '--openai-mode', 'transport',
         '--timeout', str(timeout_seconds),
         '--out', output,
     ]

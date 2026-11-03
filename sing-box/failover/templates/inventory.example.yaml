@@ -17,19 +17,8 @@ runtime:
   # xray_outbound_interface: eth0
   # xray_balancer_port: 10808
   active_config_path: /etc/sing-box/config.json
-  switch_method: copy-and-restart
-  singbox_service_name: sing-box-tun
   singbox_check_command: /usr/local/bin/sing-box check -c {config_path}
-  singbox_restart_command: systemctl restart sing-box-tun
-  stabilization_delay_seconds: 5
   request_timeout_seconds: 10
-  cooldown_seconds: 900
-  consecutive_failures_before_switch: 2
-  require_both_apis: true
-  state_path: /opt/singbox-failover/state.json
-  log_path: /opt/singbox-failover/failover.log
   pool_results_path: /opt/singbox-failover/pool-probe-results.json
-  pool_refresh_max_age_seconds: 43200
   pool_probe_script: /opt/singbox-failover/scripts/singbox_pool_probe.py
   lock_path: /run/singbox-failover.lock
-  active_openai_mode: transport

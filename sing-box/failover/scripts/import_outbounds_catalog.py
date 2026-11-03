@@ -192,20 +192,10 @@ def build_inventory_yaml(configs: list[dict[str, Any]], runtime: dict[str, Any])
 
 
 def default_runtime(args: argparse.Namespace) -> dict[str, Any]:
-    inventory_dir = Path(args.inventory_out).parent
     return {
         'active_config_path': args.active_config_path,
-        'switch_method': 'copy-and-restart',
-        'singbox_service_name': args.service_name,
         'singbox_check_command': args.check_command,
-        'singbox_restart_command': args.restart_command,
-        'stabilization_delay_seconds': 5,
         'request_timeout_seconds': 10,
-        'cooldown_seconds': 900,
-        'consecutive_failures_before_switch': 2,
-        'require_both_apis': True,
-        'state_path': args.state_path or str(inventory_dir / 'state.json'),
-        'log_path': args.log_path or str(inventory_dir / 'failover.log'),
         'lock_path': '/run/singbox-failover.lock',
     }
 
@@ -218,11 +208,7 @@ def main() -> int:
     parser.add_argument('--inventory-out', required=True)
     parser.add_argument('--runtime-from', help='existing inventory whose runtime section must be preserved')
     parser.add_argument('--active-config-path', default='/etc/sing-box/config.json')
-    parser.add_argument('--restart-command', default='sudo -n systemctl restart sing-box-tun')
     parser.add_argument('--check-command', default='/usr/local/bin/sing-box check -c {config_path}')
-    parser.add_argument('--service-name', default='sing-box-tun')
-    parser.add_argument('--state-path', help='default: state.json beside the output inventory')
-    parser.add_argument('--log-path', help='default: failover.log beside the output inventory')
     args = parser.parse_args()
 
     try:

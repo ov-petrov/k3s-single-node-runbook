@@ -15,14 +15,16 @@ direct-исключения, в том числе для SSH. Остальной
 
 ## Файлы и инструкции
 
+- [Восстановление после wipe](../docs/sing-box-recovery.md) описывает установку
+  с нуля и минимальный набор секретов для хранения вне VPS.
 - [Управление TUN и Xray](../docs/sing-box-host-proxy.md) описывает маршрутизацию,
   безопасное применение конфигов и диагностику.
 - [Подписка провайдера](../docs/sing-box-subscription.md) описывает настройку
   балансировки, обновление пула и хранение секретов.
-- [Контроллер переключения](../docs/sing-box-failover.md) описывает прежний режим
-  с заменой конфигурации sing-box.
-- [config.example.json](config.example.json) служит базой для TUN. Для
-  балансировки замените его VLESS-выход на SOCKS по инструкции в документации.
+- [tun-xray.example.json](tun-xray.example.json) служит базой для TUN с Xray.
+  [config.example.json](config.example.json) показывает прямой VLESS-выход.
+- [Панель и скилл Hermes](../docs/hermes-dashboard.md) описывает доступ по SSH
+  и установку инструкций диагностики VPS.
 - [failover/templates](failover/templates/) содержит примеры inventory,
   окружения и systemd units.
 - [SHA256SUMS](failover/SHA256SUMS) содержит контрольные суммы скриптов.
