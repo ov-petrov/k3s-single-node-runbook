@@ -8,7 +8,7 @@
 
 | Где хранить | Что требуется |
 | --- | --- |
-| Git | Шаблон TUN, скрипты, systemd units и эта инструкция |
+| Git | Шаблон TUN, скрипты, systemd units, настройка networkd и эта инструкция |
 | Менеджер паролей или шифрованный бэкап вне VPS | Полная HTTPS-ссылка подписки и токен Telegram-бота для `getMe` |
 | Канал восстановления доступа | SSH-ключ на своей машине и вход в консоль провайдера VPS |
 
@@ -85,9 +85,9 @@ sudoedit /etc/singbox-failover/subscription.url /opt/singbox-failover/failover.e
 аргументы команд или историю shell.
 
 Подготовьте TUN и inventory. Команды берут адрес из текущего SSH-сеанса
-и физический интерфейс из основного IPv4-маршрута. Если администрируете VPS
-через несколько адресов или отдельную сеть, внесите их CIDR в direct-правило
-обоих файлов до включения TUN.
+и физический интерфейс из основного IPv4-маршрута. Добавьте CIDR других
+административных адресов в `route_exclude_address` в обоих файлах до
+включения TUN. Ядро будет направлять трафик к этим адресам мимо TUN.
 
 ~~~bash
 (
@@ -108,8 +108,8 @@ os.umask(0o077)
 home = Path('/opt/singbox-failover')
 config = json.loads(Path('sing-box/tun-xray.example.json').read_text())
 ssh_client = ipaddress.ip_network(sys.argv[1], strict=False)
-direct = next(rule for rule in config['route']['rules'] if rule.get('outbound') == 'direct')
-direct['ip_cidr'].append(str(ssh_client))
+tun = next(inbound for inbound in config['inbounds'] if inbound['type'] == 'tun')
+tun.setdefault('route_exclude_address', []).append(str(ssh_client))
 payload = json.dumps(config, indent=2) + '\n'
 (home / 'base-config.json').write_text(payload)
 Path('/etc/sing-box/config.json').write_text(payload)
@@ -129,20 +129,58 @@ PY
 
 ## Первый запуск и проверки
 
-Установите units и разрешите сервису обновления запись в каталог Xray.
+Если физический интерфейс управляется `systemd-networkd`, установите
+[drop-in](../sing-box/networkd/90-sing-box-routing.conf) до запуска TUN.
+Он сохраняет правила маршрутизации, созданные sing-box, при перезапуске
+networkd. Второй [drop-in](../sing-box/networkd/90-ssh-bypass.conf) направляет
+ответы локального SSH-сервера через основную таблицу маршрутизации.
+Его приоритет `8990` срабатывает перед правилами TUN с приоритетом от
+`9000`. Если SSH слушает другой порт, подставьте его в `SourcePort`.
+Устанавливайте настройки при остановленном TUN и доступной консоли провайдера.
+Для текущей загрузки добавьте правило SSH через `ip rule`. Drop-in применится
+при следующем запуске networkd. Проверьте несколько новых SSH-сеансов.
+[Параметры networkd](https://www.freedesktop.org/software/systemd/man/256/networkd.conf.html#ManageForeignRoutingPolicyRules=)
+
+~~~bash
+if systemctl is-active --quiet systemd-networkd.service; then
+  uplink=$(ip -4 route show default | awk 'NR==1 {for (i=1; i<NF; i++) if ($i=="dev") print $(i+1)}')
+  network_file=$(LC_ALL=C networkctl status "$uplink" --no-pager | awk '/Network File:/ {print $NF}')
+  if [[ "$network_file" != /*.network ]]; then
+    printf '%s\n' 'Не удалось найти .network-файл физического интерфейса.' >&2
+    exit 1
+  fi
+  sudo install -D -m 0644 sing-box/networkd/90-sing-box-routing.conf \
+    /etc/systemd/networkd.conf.d/90-sing-box-routing.conf
+  sudo install -D -m 0644 sing-box/networkd/90-ssh-bypass.conf \
+    "/etc/systemd/network/${network_file##*/}.d/90-ssh-bypass.conf"
+  for family in -4 -6; do
+    if ! ip "$family" rule show priority 8990 | grep -q .; then
+      sudo ip "$family" rule add priority 8990 iif lo ipproto tcp sport 22 lookup main protocol static
+    fi
+  done
+  ip -4 rule show priority 8990
+  ip -6 rule show priority 8990
+fi
+~~~
+
+В выводе обоих семейств ожидается `iif lo ipproto tcp sport 22 lookup main`.
+Если приоритет `8990` уже занят другим правилом, разрешите конфликт до запуска
+TUN. Установленный `ManageForeignRoutingPolicyRules=no` вступит в силу при
+следующем запуске networkd. До этого избегайте его перезапуска при работающем TUN.
+
+Установите units. Шаблон службы обновления разрешает запись в каталог Xray.
 Первая загрузка подписки использует подготовленный SOCKS-конфиг sing-box
 на диске. Запускать TUN для этого не требуется.
 
 ~~~bash
 sudo install -m 0644 sing-box/sing-box-tun.service /etc/systemd/system/
 sudo install -m 0644 sing-box/failover/templates/{xray-provider-pool.service,singbox-pool-refresh.service,singbox-pool-refresh.timer} /etc/systemd/system/
-sudo install -d -m 0755 /etc/systemd/system/{singbox-pool-refresh.service.d,sing-box-tun.service.d}
-printf '[Service]\nReadWritePaths=/etc/xray\n' |
-  sudo tee /etc/systemd/system/singbox-pool-refresh.service.d/xray.conf >/dev/null
+sudo install -d -m 0755 /etc/systemd/system/sing-box-tun.service.d
 printf '[Unit]\nWants=xray-provider-pool.service\nAfter=xray-provider-pool.service\n' |
   sudo tee /etc/systemd/system/sing-box-tun.service.d/xray.conf >/dev/null
 
 sudo systemctl daemon-reload
+sudo systemctl disable sing-box-tun.service
 sudo /usr/local/bin/sing-box check -c /etc/sing-box/config.json
 sudo systemctl start singbox-pool-refresh.service
 sudo /usr/local/bin/xray run -test -config /etc/xray/provider-pool.json
@@ -158,16 +196,57 @@ sudo systemd-run --unit=sing-box-recovery-rollback --on-active=180s \
   /bin/systemctl stop sing-box-tun.service
 sudo systemctl start sing-box-tun.service
 ip -brief link show singtun0
+ip -4 rule show
+ip -4 route show table 2022
 curl --noproxy '*' --max-time 12 -fsS -o /dev/null https://api.github.com/
 ~~~
 
-Откройте **новый** SSH-сеанс и проверьте DNS и доступность API по
-[инструкции проверки сети](sing-box-host-proxy.md#проверки-сети). Только после
-этого отмените откат и включите автозапуск.
+Откройте несколько **новых** SSH-сеансов и проверьте DNS и доступность API по
+[инструкции проверки сети](sing-box-host-proxy.md#проверки-сети).
+Если доступен второй административный маршрут, проверьте вход и через него.
+До запуска TUN убедитесь, что можно восстановить доступ через консоль VPS.
+После проверки отмените откат и включите автозапуск Xray и таймера обновления.
+TUN запускайте вручную, чтобы обычная перезагрузка возвращала прямой доступ.
 
 ~~~bash
 sudo systemctl stop sing-box-recovery-rollback.timer
-sudo systemctl enable xray-provider-pool.service sing-box-tun.service
+sudo systemctl enable xray-provider-pool.service
 sudo systemctl enable --now singbox-pool-refresh.timer
 systemctl list-timers singbox-pool-refresh.timer --no-pager
 ~~~
+
+## Если SSH недоступен
+
+Если в консоли VPS уже открыта командная строка с доступом к `sudo`,
+остановите TUN командой `sudo systemctl stop sing-box-tun.service`.
+
+Если вход в ОС настроен только по SSH-ключу, используйте меню GRUB через
+виртуальную консоль провайдера. Перезагрузка прервёт работу VPS.
+
+1. При перезагрузке откройте меню GRUB. Выберите обычную запись Ubuntu и
+   нажмите `e`.
+2. Добавьте `systemd.mask=sing-box-tun.service` в конец строки, которая
+   начинается с `linux`.
+3. Нажмите `Ctrl+X` и после загрузки подключитесь по SSH прежним ключом.
+
+Параметр действует на одну загрузку. После входа проверьте доступ по SSH
+и установите правило для ответов SSH перед включением TUN.
+Под маской GRUB `systemctl disable` может пропустить отключение автозапуска.
+Удалите ссылку `sudo rm -f /etc/systemd/system/multi-user.target.wants/sing-box-tun.service`
+и проверьте `systemctl list-dependencies --reverse sing-box-tun.service`.
+Если маска GRUB действует, для ручного запуска используйте временную службу
+`sing-box-tun-manual.service`. Сначала запланируйте её остановку по таймеру.
+
+~~~bash
+sudo systemd-run --unit=sing-box-tun-manual-rollback --on-active=240s \
+  /usr/bin/systemctl stop sing-box-tun-manual.service
+sudo systemd-run --unit=sing-box-tun-manual.service --property=Type=exec \
+  /usr/local/bin/sing-box run -c /etc/sing-box/config.json
+~~~
+
+Откройте несколько новых SSH-сеансов. Проверьте Telegram и запрос к модели,
+затем отмените таймер командой
+`sudo systemctl stop sing-box-tun-manual-rollback.timer`.
+Временная служба существует до перезагрузки. После обычной загрузки
+запускайте TUN вручную командой `sudo systemctl start sing-box-tun.service`.
+[Параметр systemd.mask](https://www.freedesktop.org/software/systemd/man/latest/systemd-debug-generator.html)

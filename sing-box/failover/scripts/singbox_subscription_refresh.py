@@ -45,6 +45,16 @@ class SubscriptionError(ValueError):
     """Raised when a provider response cannot be safely used."""
 
 
+class SubscriptionRedirectHandler(request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        source = parse.urlsplit(req.full_url)
+        target = parse.urlsplit(newurl)
+        if (target.scheme != 'https' or target.username or target.password
+                or (source.hostname, source.port or 443) != (target.hostname, target.port or 443)):
+            raise SubscriptionError('subscription redirect must stay on the same HTTPS origin')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -83,7 +93,7 @@ def read_subscription_url(path: Path) -> str:
     if value.startswith('SUBSCRIPTION_URL='):
         value = value.split('=', 1)[1].strip()
     parts = parse.urlsplit(value)
-    if parts.scheme != 'https' or not parts.netloc:
+    if parts.scheme != 'https' or not parts.hostname or parts.username or parts.password:
         raise SubscriptionError('subscription URL must use HTTPS and include a host')
     return value
 
@@ -112,7 +122,8 @@ def download_subscription(url: str, metadata: dict[str, str], timeout_seconds: i
         headers['If-Modified-Since'] = metadata['last_modified']
     response_request = request.Request(url, headers=headers)
     try:
-        with request.urlopen(response_request, timeout=timeout_seconds) as response:
+        opener = request.build_opener(SubscriptionRedirectHandler())
+        with opener.open(response_request, timeout=timeout_seconds) as response:
             content_length = response.headers.get('Content-Length')
             if content_length and int(content_length) > max_bytes:
                 raise SubscriptionError(f'subscription response exceeds {max_bytes} bytes')
@@ -128,7 +139,7 @@ def download_subscription(url: str, metadata: dict[str, str], timeout_seconds: i
             return None, metadata
         raise SubscriptionError(f'subscription request returned HTTP {exc.code}') from exc
     except (OSError, ValueError) as exc:
-        raise SubscriptionError(f'subscription request failed: {exc}') from exc
+        raise SubscriptionError(f'subscription request failed ({type(exc).__name__})') from exc
 
 
 def query_value(values: dict[str, str], key: str) -> str:
@@ -444,6 +455,8 @@ def refresh(args: argparse.Namespace) -> int:
             log('subscription_not_modified')
             if args.refresh_pool:
                 checked, healthy = run_pool_probe(inventory_path, runtime, len(document['configs']))
+                if healthy == 0:
+                    raise SubscriptionError('current subscription has no healthy candidates')
                 log('pool_refreshed', checked=checked, healthy=healthy, source_changed=False)
             return 0
 
@@ -518,7 +531,7 @@ def main() -> int:
     parser.add_argument('--subscription-url-file', required=True)
     parser.add_argument('--metadata-path', required=True)
     parser.add_argument('--catalog-path', required=True)
-    parser.add_argument('--lock-path', default='/run/singbox-failover.lock')
+    parser.add_argument('--lock-path', default='/run/singbox-failover/refresh.lock')
     parser.add_argument('--timeout', type=int, default=20)
     parser.add_argument('--max-bytes', type=int, default=MAX_SUBSCRIPTION_BYTES)
     parser.add_argument('--refresh-pool', action='store_true')

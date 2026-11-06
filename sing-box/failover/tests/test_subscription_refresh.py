@@ -5,15 +5,21 @@ import json
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
+from urllib import request
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 
 from import_outbounds_catalog import build_candidates, outbound_identity
-from singbox_subscription_refresh import SubscriptionError, parse_subscription_payload
+from singbox_subscription_refresh import (
+    SubscriptionError, SubscriptionRedirectHandler, download_subscription,
+    parse_subscription_payload, refresh,
+)
+from singbox_pool_probe import check_openai_transport
 from xray_transport import activate_pool, build_pool
 
 
@@ -148,6 +154,47 @@ class SubscriptionParserTest(unittest.TestCase):
         self.assertTrue(all(config['name'].startswith('cfg-') for config in configs))
         direct_cidrs = documents[configs[0]['name']]['route']['rules'][0]['ip_cidr']
         self.assertEqual(direct_cidrs, ['10.0.0.0/8', '198.51.100.10/32', '2001:db8::10/128'])
+
+
+class RefreshSafetyTest(unittest.TestCase):
+    def test_redirect_rejects_downgrade_and_other_origins(self) -> None:
+        handler = SubscriptionRedirectHandler()
+        req = request.Request('https://subscription.example/access?token=private')
+        for target in ['http://subscription.example/access', 'https://other.example/access',
+                       'https://subscription.example:8443/access', 'https://user@subscription.example/access']:
+            with self.subTest(target=target), self.assertRaises(SubscriptionError):
+                handler.redirect_request(req, None, 302, 'Found', {}, target)
+        redirected = handler.redirect_request(req, None, 302, 'Found', {}, 'https://subscription.example/new')
+        self.assertEqual(redirected.full_url, 'https://subscription.example/new')
+
+    def test_download_error_does_not_disclose_subscription_url(self) -> None:
+        with patch('singbox_subscription_refresh.request.build_opener') as opener:
+            opener.return_value.open.side_effect = OSError('https://subscription.example/?token=private')
+            with self.assertRaises(SubscriptionError) as failure:
+                download_subscription('https://subscription.example/?token=private', {}, 10, 1024)
+        self.assertNotIn('private', str(failure.exception))
+
+    def test_openai_policy_and_server_errors_fail_probe(self) -> None:
+        for code in [200, 401, 404, 405, 403, 429, 500, 503, 302, 0]:
+            with self.subTest(code=code), patch('singbox_pool_probe.subprocess.run') as run:
+                run.return_value.returncode = 0
+                run.return_value.stdout = str(code)
+                result = check_openai_transport('http://127.0.0.1:2080', 'https://api.example/', 10)
+                self.assertEqual(result['ok'], code in {200, 401, 404, 405})
+                self.assertIn('--noproxy', run.call_args.args[0])
+
+    def test_unchanged_subscription_with_no_healthy_nodes_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            args = Namespace(inventory='unused', metadata_path='unused', subscription_url_file='unused',
+                             lock_path=str(Path(directory) / 'refresh.lock'), timeout=10, max_bytes=1024,
+                             refresh_pool=True)
+            with patch('singbox_subscription_refresh.load_yaml', return_value={'runtime': {}, 'configs': [{}]}), \
+                 patch('singbox_subscription_refresh.load_metadata', return_value={}), \
+                 patch('singbox_subscription_refresh.read_subscription_url', return_value='https://subscription.example/'), \
+                 patch('singbox_subscription_refresh.download_subscription', return_value=(None, {})), \
+                 patch('singbox_subscription_refresh.run_pool_probe', return_value=(1, 0)):
+                with self.assertRaisesRegex(SubscriptionError, 'no healthy candidates'):
+                    refresh(args)
 
 
 class XrayPoolTest(unittest.TestCase):

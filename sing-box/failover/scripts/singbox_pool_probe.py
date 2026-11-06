@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml  # type: ignore
 
+from import_outbounds_catalog import atomic_write_text
+
 
 def load_yaml(path: Path) -> dict[str, Any]:
     with path.open('r', encoding='utf-8') as fh:
@@ -60,7 +62,7 @@ def wait_port(port: int, timeout: float = 8.0) -> bool:
 
 def check_telegram(proxy_url: str, token: str, timeout_seconds: int) -> dict[str, Any]:
     started = time.monotonic()
-    cmd = ['curl', '-sS', '--max-time', str(timeout_seconds), '--proxy', proxy_url, '--config', '-']
+    cmd = ['curl', '-q', '-sS', '--max-time', str(timeout_seconds), '--noproxy', '', '--proxy', proxy_url, '--config', '-']
     config = 'url=' + json.dumps(f'https://api.telegram.org/bot{token}/getMe') + '\n'
     try:
         res = subprocess.run(cmd, input=config, capture_output=True, text=True, timeout=timeout_seconds + 10)
@@ -80,14 +82,14 @@ def check_telegram(proxy_url: str, token: str, timeout_seconds: int) -> dict[str
         except Exception as ex:
             error = f'json parse failed: {ex}'
     else:
-        error = (res.stderr or 'curl failed')[:300]
+        error = f'curl failed with exit code {res.returncode}'
     return {'ok': ok, 'latency_ms': latency_ms, 'error': error, 'body_preview': body if not ok else None}
 
 
 def check_openai_transport(proxy_url: str, url: str, timeout_seconds: int) -> dict[str, Any]:
     started = time.monotonic()
     cmd = [
-        'curl', '-sS', '--max-time', str(timeout_seconds), '--proxy', proxy_url,
+        'curl', '-q', '-sS', '--max-time', str(timeout_seconds), '--noproxy', '', '--proxy', proxy_url,
         '-o', '/dev/null', '-w', '%{http_code}', url,
     ]
     try:
@@ -103,7 +105,9 @@ def check_openai_transport(proxy_url: str, url: str, timeout_seconds: int) -> di
         code_int = int(code)
     except Exception:
         code_int = None
-    ok = code_int is not None and code_int > 0
+    # Expected unauthenticated responses establish transport reachability.
+    # Policy blocks, rate limits and server errors must fail the probe.
+    ok = code_int in {200, 204, 400, 401, 404, 405, 422}
     return {'ok': ok, 'latency_ms': latency_ms, 'error': None if ok else f'unexpected http code: {code}', 'http_code': code_int}
 
 
@@ -182,7 +186,7 @@ def main() -> int:
                         proc.kill()
                         proc.wait(timeout=5)
 
-    output_path.write_text(json.dumps(results, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    atomic_write_text(output_path, json.dumps(results, ensure_ascii=False, indent=2) + '\n')
     healthy = [r for r in results if r['healthy']]
     print(json.dumps({'checked': len(results), 'healthy': len(healthy), 'out': str(output_path), 'openai_mode': 'transport'}, ensure_ascii=False))
     return 0

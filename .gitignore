@@ -5,3 +5,15 @@
 kubeconfig
 *.kubeconfig
 /.idea/
+/.private/
+/career/
+/docs/cloud-ru*diagnostics*.md
+**/__pycache__/
+*.pyc
+.env
+auth.json
+subscription.url
+subscription-catalog.json
+subscription-metadata.json
+provider-pool.json
+failover.env

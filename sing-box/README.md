@@ -23,6 +23,10 @@ direct-исключения, в том числе для SSH. Остальной
   балансировки, обновление пула и хранение секретов.
 - [tun-xray.example.json](tun-xray.example.json) служит базой для TUN с Xray.
   [config.example.json](config.example.json) показывает прямой VLESS-выход.
+- [Drop-in networkd](networkd/90-sing-box-routing.conf) сохраняет правила TUN
+  при перезапуске менеджера сети.
+- [Правило SSH](networkd/90-ssh-bypass.conf) направляет ответы SSH напрямую
+  через основную таблицу маршрутизации для IPv4 и IPv6.
 - [Панель и скилл Hermes](../docs/hermes-dashboard.md) описывает доступ по SSH
   и установку инструкций диагностики VPS.
 - [failover/templates](failover/templates/) содержит примеры inventory,

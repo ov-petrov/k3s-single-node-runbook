@@ -15,14 +15,19 @@ Sing-box поднимает интерфейс `singtun0`, применяет п
 При диагностике проверяйте системный resolver и upstream DNS отдельно.
 
 В шаблоне sing-box типизированный UDP DNS без `detour` использует прямое
-подключение. После DNS-правила срабатывают direct-исключения, в том числе
-локальные сети, сеть провайдера VPS и адрес клиента SSH. Остальные запросы
-обрабатывает `route.final: proxy-out`. Xray привязывает подключения к
+подключение. После DNS-правила срабатывают direct-исключения для локальных
+сетей. Адрес клиента SSH исключается из перехвата в `route_exclude_address`.
+Остальные запросы обрабатывает `route.final: proxy-out`. Xray привязывает подключения к
 физическому интерфейсу через `sockopt.interface`, чтобы они обходили TUN.
 
 TUN принимает IP-пакеты от ОС. VLESS и Reality работают на внешнем участке
 от Xray до узла провайдера. VLESS передаёт запросы прокси, а Reality защищает
 соединение с узлом.
+
+Шаблон использует IPv4 TUN и прямой незашифрованный DNS. При наличии внешнего
+IPv6-маршрута IPv6 требует отдельной настройки. Остановка TUN возвращает
+обычную маршрутизацию VPS. Эта конфигурация не гарантирует скрытие DNS-запросов
+и блокировку прямого выхода при остановке туннеля.
 
 [Параметры TUN sing-box](https://sing-box.sagernet.org/configuration/inbound/tun/)
 · [Правила маршрутизации sing-box](https://sing-box.sagernet.org/configuration/route/)
@@ -77,6 +82,8 @@ sudo systemctl stop sing-box-rollback.timer
 
 ~~~bash
 ip -brief link show singtun0
+ip -4 rule show
+ip -4 route show table 2022
 ss -ltn 'sport = :10808'
 getent hosts api.telegram.org
 resolvectl status
@@ -99,6 +106,20 @@ SOCKS Xray.
 curl --noproxy '' --socks5-hostname 127.0.0.1:10808 --max-time 12 \
   -sS -o /dev/null -w '%{http_code}\n' https://api.github.com/
 ~~~
+
+Если SOCKS отвечает, а системный запрос зависает, проверьте маршрут до
+IPv4-адреса Telegram.
+
+~~~bash
+telegram_ip=$(getent ahostsv4 api.telegram.org | awk 'NR==1 {print $1; exit}')
+ip -4 route get "$telegram_ip"
+~~~
+
+Для обычного трафика ожидается `dev singtun0`. Если интерфейс поднят, но
+запрос уходит через физический интерфейс, проверьте наличие правила
+`lookup 2022` и переходов `goto` без цели. На VPS с networkd установите
+[защиту правил TUN](sing-box-recovery.md#первый-запуск-и-проверки) и после
+проверки SSH-исключений пересоздайте правила перезапуском sing-box.
 
 ## Остановка
 

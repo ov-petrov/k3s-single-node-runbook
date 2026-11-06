@@ -5,10 +5,16 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+UMask=0077
 EnvironmentFile=/opt/singbox-failover/failover.env
-ExecStart=/usr/bin/python3 /opt/singbox-failover/scripts/singbox_subscription_refresh.py --inventory /opt/singbox-failover/inventory.yaml --base-config /opt/singbox-failover/base-config.json --generated-dir /opt/singbox-failover/generated --subscription-url-file /etc/singbox-failover/subscription.url --metadata-path /opt/singbox-failover/subscription-metadata.json --catalog-path /opt/singbox-failover/subscription-catalog.json --lock-path /run/singbox-failover.lock --refresh-pool
+ExecStart=/usr/bin/python3 /opt/singbox-failover/scripts/singbox_subscription_refresh.py --inventory /opt/singbox-failover/inventory.yaml --base-config /opt/singbox-failover/base-config.json --generated-dir /opt/singbox-failover/generated --subscription-url-file /etc/singbox-failover/subscription.url --metadata-path /opt/singbox-failover/subscription-metadata.json --catalog-path /opt/singbox-failover/subscription-catalog.json --lock-path /run/singbox-failover/refresh.lock --refresh-pool
 WorkingDirectory=/opt/singbox-failover
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
-ReadWritePaths=/opt/singbox-failover
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/singbox-failover /etc/xray
+RuntimeDirectory=singbox-failover
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ReadOnlyPaths=/opt/singbox-failover/scripts
